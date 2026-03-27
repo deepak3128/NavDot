@@ -1,0 +1,8 @@
+node_modules/
+apps/*/node_modules/
+.env
+apps/api/.env
+apps/mobile/.expo/
+apps/mobile/dist/
+apps/api/dist/
+*.log

@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "NavDot",
+    "slug": "navdot",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "navdot",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0b172a"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "NavDot uses Bluetooth to pair and send navigation data to your device.",
+        "NSBluetoothPeripheralUsageDescription": "NavDot uses Bluetooth to communicate with your NavDot hardware.",
+        "NSLocationWhenInUseUsageDescription": "NavDot needs location to calculate navigation heading while riding.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "NavDot needs background location to keep navigation active while your screen is locked.",
+        "UIBackgroundModes": [
+          "location",
+          "bluetooth-central"
+        ]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0b172a"
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_CONNECT"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

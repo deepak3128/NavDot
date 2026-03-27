@@ -1,0 +1,27 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  fullName     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model CoordinateEvent {
+  id          String   @id @default(cuid())
+  deviceId    String
+  latitude    Float
+  longitude   Float
+  altitude    Float?
+  source      String   @default("ble")
+  receivedAt  DateTime @default(now())
+}
