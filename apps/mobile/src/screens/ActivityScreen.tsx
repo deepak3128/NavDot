@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
-import { loadRideActivitySnapshot } from "../services/stravaService";
-import { useStravaStore } from "../store/useStravaStore";
+import { loadRideActivitySnapshot } from "../services/activityService";
+import { useActivityStore } from "../store/useActivityStore";
 
 type Segment = "rides" | "device";
 
@@ -49,15 +49,15 @@ export function ActivityScreen() {
   const [segment, setSegment] = useState<Segment>("rides");
 
   const { deviceName, firmwareVersion, sessions, syncStatuses, isLoading, error, setError, setLoading, setImportData } =
-    useStravaStore();
-  const lastSyncedAt = useStravaStore((state) => state.lastSyncedAt);
+    useActivityStore();
+  const lastSyncedAt = useActivityStore((state) => state.lastSyncedAt);
 
   useEffect(() => {
     if (!error) {
       return;
     }
 
-    if (/token|strava|access/i.test(error)) {
+    if (/token|activity|access/i.test(error)) {
       setError(undefined);
     }
   }, [error, setError]);

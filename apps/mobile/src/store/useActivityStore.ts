@@ -1,9 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { DeviceSyncStatus, RideSession } from "../services/stravaService";
+import { DeviceSyncStatus, RideSession } from "../services/activityService";
 
-type StravaState = {
+type ActivityState = {
   deviceName?: string;
   firmwareVersion?: string;
   sessions: RideSession[];
@@ -22,7 +22,7 @@ type StravaState = {
   clear: () => void;
 };
 
-export const useStravaStore = create<StravaState>()(
+export const useActivityStore = create<ActivityState>()(
   persist(
     (set) => ({
       sessions: [],
@@ -50,12 +50,12 @@ export const useStravaStore = create<StravaState>()(
         })
     }),
     {
-      name: "navdot-strava",
+      name: "navdot-activity",
       version: 2,
       storage: createJSONStorage(() => AsyncStorage),
       migrate: (persistedState, version) => {
         if (!persistedState || version >= 2) {
-          return persistedState as StravaState;
+          return persistedState as ActivityState;
         }
 
         return {
@@ -70,7 +70,7 @@ export const useStravaStore = create<StravaState>()(
           setError: () => undefined,
           setImportData: () => undefined,
           clear: () => undefined
-        } as StravaState;
+        } as ActivityState;
       }
     }
   )
