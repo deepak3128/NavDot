@@ -64,16 +64,21 @@ export default function App() {
               },
               tabBarStyle: {
                 position: "absolute",
-                left: 14,
-                right: 14,
-                bottom: 14,
+                left: 12,
+                right: 12,
+                bottom: 7,
                 borderRadius: 18,
                 backgroundColor: "#ffffff",
-                borderTopColor: "#e5e7eb",
+                borderColor: "#e5e7eb",
                 borderWidth: 1,
-                height: 64,
-                paddingTop: 8,
-                paddingBottom: 10
+                height: 66,
+                paddingTop: 5,
+                paddingBottom: 8,
+                elevation: 6,
+                shadowColor: "#111827",
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.08,
+                shadowRadius: 10
               },
               tabBarLabelStyle: {
                 fontWeight: "700",

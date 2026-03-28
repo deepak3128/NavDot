@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import * as Location from "expo-location";
 import MapView, { LongPressEvent, Marker, Polyline, Region } from "react-native-maps";
 import { useFocusEffect } from "@react-navigation/native";
@@ -676,14 +676,20 @@ export function HomeScreen() {
   }, [currentPosition, isRideModeActive, rideCommandToken, selectedDestination]);
 
   const handleScan = async () => {
-    const granted = await bleService.requestPermissions();
-    if (!granted) {
-      useBleStore.getState().setError("Bluetooth permission denied.");
-      return;
-    }
+    try {
+      const granted = await bleService.requestPermissions();
+      if (!granted) {
+        useBleStore.getState().setError("Bluetooth permission denied.");
+        return;
+      }
 
-    await bleService.waitForPoweredOn();
-    await bleService.startScan();
+      await bleService.waitForPoweredOn();
+      await bleService.startScan();
+    } catch (scanError) {
+      const message = scanError instanceof Error ? scanError.message : "Unable to start Bluetooth scan.";
+      useBleStore.getState().setError(message);
+      Alert.alert("Scan failed", message);
+    }
   };
 
   const connect = async (deviceId: string) => {
