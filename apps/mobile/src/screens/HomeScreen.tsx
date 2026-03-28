@@ -31,7 +31,7 @@ type RouteOption = {
   headingDeg: number;
 };
 
-export function PairingScreen() {
+export function HomeScreen() {
   const [busyId, setBusyId] = useState<string | undefined>();
   const [mapRegion, setMapRegion] = useState<Region>(DEFAULT_REGION);
   const [selectedDestination, setSelectedDestination] = useState<{ latitude: number; longitude: number }>();

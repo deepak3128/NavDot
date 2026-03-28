@@ -45,7 +45,7 @@ function formatSyncLabel(iso?: string): string {
   return `Last refresh ${new Date(iso).toLocaleString()}`;
 }
 
-export function StravaScreen() {
+export function ActivityScreen() {
   const [segment, setSegment] = useState<Segment>("rides");
 
   const { deviceName, firmwareVersion, sessions, syncStatuses, isLoading, error, setError, setLoading, setImportData } =

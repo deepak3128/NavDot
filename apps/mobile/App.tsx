@@ -6,10 +6,10 @@ import { Feather } from "@expo/vector-icons";
 import { NavigationContainer, DefaultTheme } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { PairingScreen } from "./src/screens/PairingScreen";
+import { HomeScreen } from "./src/screens/HomeScreen";
 import { NavigationScreen } from "./src/screens/NavigationScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
-import { StravaScreen } from "./src/screens/StravaScreen";
+import { ActivityScreen } from "./src/screens/ActivityScreen";
 import { AuthScreen } from "./src/screens/AuthScreen";
 import { bleService } from "./src/services/bleService";
 import { useAuthStore } from "./src/store/useAuthStore";
@@ -98,14 +98,14 @@ export default function App() {
           >
             <Tabs.Screen
               name="Pairing"
-              component={PairingScreen}
+              component={HomeScreen}
               options={{
                 title: "Home",
                 tabBarLabel: "Home"
               }}
             />
             <Tabs.Screen name="Navigation" component={NavigationScreen} options={{ headerShown: false }} />
-            <Tabs.Screen name="Activities" component={StravaScreen} options={{ headerShown: false }} />
+            <Tabs.Screen name="Activities" component={ActivityScreen} options={{ headerShown: false }} />
             <Tabs.Screen name="Settings" component={SettingsScreen} options={{ headerShown: false }} />
           </Tabs.Navigator>
         )}
