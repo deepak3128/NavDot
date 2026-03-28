@@ -5,7 +5,6 @@ import MapView, { LongPressEvent, Marker, Region } from "react-native-maps";
 import { bleService } from "../services/bleService";
 import { sendDestinationToBackend } from "../services/backendService";
 import { useBleStore } from "../store/useBleStore";
-import { useSettingsStore } from "../store/useSettingsStore";
 
 const DEFAULT_REGION: Region = {
   latitude: 28.6139,
@@ -22,7 +21,6 @@ export function PairingScreen() {
   const [sendMessage, setSendMessage] = useState<string | undefined>();
   const { devices, isScanning, isConnected, connectedDeviceId, connectedDeviceName, preferredDeviceName, error } =
     useBleStore();
-  const apiBaseUrl = useSettingsStore((state) => state.apiBaseUrl);
 
   useEffect(() => {
     const bootstrapLocation = async () => {
@@ -95,7 +93,7 @@ export function PairingScreen() {
         label: "selected_pin"
       });
 
-      await sendDestinationToBackend(apiBaseUrl, {
+      await sendDestinationToBackend({
         deviceId: connectedDeviceId,
         latitude: selectedDestination.latitude,
         longitude: selectedDestination.longitude,

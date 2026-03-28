@@ -1,4 +1,5 @@
 import { postJsonWithRetry } from "./httpClient";
+import { resolveApiBaseUrl } from "./apiConfig";
 
 type DestinationPayload = {
   deviceId: string;
@@ -25,8 +26,8 @@ function trimSlash(url: string): string {
   return url.endsWith("/") ? url.slice(0, -1) : url;
 }
 
-export async function sendDestinationToBackend(apiBaseUrl: string, payload: DestinationPayload): Promise<void> {
-  const base = trimSlash(apiBaseUrl);
+export async function sendDestinationToBackend(payload: DestinationPayload, apiBaseUrlOverride?: string): Promise<void> {
+  const base = trimSlash(apiBaseUrlOverride ?? resolveApiBaseUrl());
   await postJsonWithRetry<DestinationResponse>(`${base}/api/navigation/destinations`, payload, {
     retries: 2,
     timeoutMs: 7000

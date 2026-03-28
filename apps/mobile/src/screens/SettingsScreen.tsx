@@ -1,7 +1,8 @@
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import { DevicePreview } from "../components/DevicePreview";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useNavStore } from "../store/useNavStore";
+import { useAuthStore } from "../store/useAuthStore";
 
 function clampZoom(value: number): number {
   return Math.max(11, Math.min(19, value));
@@ -14,6 +15,8 @@ function clampHour(value: number): number {
 export function SettingsScreen() {
   const settings = useSettingsStore();
   const setZoomLevel = useNavStore((state) => state.setZoomLevel);
+  const user = useAuthStore((state) => state.user);
+  const clearSession = useAuthStore((state) => state.clearSession);
 
   const adjustZoom = (delta: number) => {
     const next = clampZoom(settings.defaultZoom + delta);
@@ -46,7 +49,7 @@ export function SettingsScreen() {
 
       <Text className="text-3xl font-black tracking-tight text-[#111827]">Settings</Text>
       <Text className="mt-1 text-sm leading-6 text-[#4b5563]">
-        Tune map behavior, dim policy, units, and backend sync endpoint.
+        Tune map behavior, dim policy, and units.
       </Text>
 
       <View className="mt-5 rounded-3xl border border-[#e5e7eb] bg-white p-5">
@@ -118,33 +121,11 @@ export function SettingsScreen() {
       </View>
 
       <View className="mt-4 rounded-3xl border border-[#e5e7eb] bg-white p-5">
-        <Text className="text-sm font-bold text-[#111827]">Fitness Access Token</Text>
-        <Text className="mt-1 text-xs text-[#6b7280]">
-          Required for importing activities and routes. Keep this token private.
-        </Text>
-        <TextInput
-          value={settings.stravaAccessToken}
-          onChangeText={settings.setStravaAccessToken}
-          autoCapitalize="none"
-          autoCorrect={false}
-          placeholder="Paste access token"
-          placeholderTextColor="#9ca3af"
-          className="mt-3 rounded-xl border border-[#d1d5db] bg-[#f9fafb] px-3 py-3 text-[#111827]"
-        />
-      </View>
-
-      <View className="mt-4 rounded-3xl border border-[#e5e7eb] bg-white p-5">
-        <Text className="text-sm font-bold text-[#111827]">Backend API Base URL</Text>
-        <Text className="mt-1 text-xs text-[#6b7280]">Used for destination sync and telemetry ingestion.</Text>
-        <TextInput
-          value={settings.apiBaseUrl}
-          onChangeText={settings.setApiBaseUrl}
-          autoCapitalize="none"
-          autoCorrect={false}
-          placeholder="http://10.0.2.2:4000"
-          placeholderTextColor="#9ca3af"
-          className="mt-3 rounded-xl border border-[#d1d5db] bg-[#f9fafb] px-3 py-3 text-[#111827]"
-        />
+        <Text className="text-sm font-bold text-[#111827]">Account</Text>
+        <Text className="mt-1 text-xs text-[#6b7280]">Signed in as {user?.email ?? "unknown"}</Text>
+        <Pressable className="mt-3 rounded-xl bg-[#111827] px-3 py-3" onPress={clearSession}>
+          <Text className="text-center font-bold text-white">Logout</Text>
+        </Pressable>
       </View>
 
       <View className="mt-5">

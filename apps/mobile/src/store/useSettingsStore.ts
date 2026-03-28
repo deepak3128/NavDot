@@ -14,14 +14,10 @@ type SettingsState = {
   autoDimTimeoutSec: number;
   schedule: DisplaySchedule;
   units: UnitPreference;
-  stravaAccessToken: string;
-  apiBaseUrl: string;
   setDefaultZoom: (value: number) => void;
   setAutoDimTimeoutSec: (value: number) => void;
   setSchedule: (value: DisplaySchedule) => void;
   setUnits: (value: UnitPreference) => void;
-  setStravaAccessToken: (value: string) => void;
-  setApiBaseUrl: (value: string) => void;
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -34,14 +30,10 @@ export const useSettingsStore = create<SettingsState>()(
         endHour: 23
       },
       units: "kmh",
-      stravaAccessToken: "",
-      apiBaseUrl: "http://10.0.2.2:4000",
       setDefaultZoom: (value) => set({ defaultZoom: value }),
       setAutoDimTimeoutSec: (value) => set({ autoDimTimeoutSec: value }),
       setSchedule: (value) => set({ schedule: value }),
-      setUnits: (value) => set({ units: value }),
-      setStravaAccessToken: (value) => set({ stravaAccessToken: value }),
-      setApiBaseUrl: (value) => set({ apiBaseUrl: value })
+      setUnits: (value) => set({ units: value })
     }),
     {
       name: "navdot-settings",

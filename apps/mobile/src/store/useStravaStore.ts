@@ -1,21 +1,23 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { StravaActivity, StravaAthlete, StravaRoute } from "../services/stravaService";
+import { DeviceSyncStatus, RideSession } from "../services/stravaService";
 
 type StravaState = {
-  athlete?: StravaAthlete;
-  activities: StravaActivity[];
-  routes: StravaRoute[];
+  deviceName?: string;
+  firmwareVersion?: string;
+  sessions: RideSession[];
+  syncStatuses: DeviceSyncStatus[];
   isLoading: boolean;
   error?: string;
   lastSyncedAt?: string;
   setLoading: (value: boolean) => void;
   setError: (value?: string) => void;
   setImportData: (payload: {
-    athlete: StravaAthlete;
-    activities: StravaActivity[];
-    routes: StravaRoute[];
+    deviceName: string;
+    firmwareVersion: string;
+    sessions: RideSession[];
+    syncStatuses: DeviceSyncStatus[];
   }) => void;
   clear: () => void;
 };
@@ -23,31 +25,53 @@ type StravaState = {
 export const useStravaStore = create<StravaState>()(
   persist(
     (set) => ({
-      activities: [],
-      routes: [],
+      sessions: [],
+      syncStatuses: [],
       isLoading: false,
       setLoading: (value) => set({ isLoading: value }),
       setError: (value) => set({ error: value }),
       setImportData: (payload) =>
         set({
-          athlete: payload.athlete,
-          activities: payload.activities,
-          routes: payload.routes,
+          deviceName: payload.deviceName,
+          firmwareVersion: payload.firmwareVersion,
+          sessions: payload.sessions,
+          syncStatuses: payload.syncStatuses,
           error: undefined,
           lastSyncedAt: new Date().toISOString()
         }),
       clear: () =>
         set({
-          athlete: undefined,
-          activities: [],
-          routes: [],
+          deviceName: undefined,
+          firmwareVersion: undefined,
+          sessions: [],
+          syncStatuses: [],
           error: undefined,
           lastSyncedAt: undefined
         })
     }),
     {
       name: "navdot-strava",
-      storage: createJSONStorage(() => AsyncStorage)
+      version: 2,
+      storage: createJSONStorage(() => AsyncStorage),
+      migrate: (persistedState, version) => {
+        if (!persistedState || version >= 2) {
+          return persistedState as StravaState;
+        }
+
+        return {
+          deviceName: undefined,
+          firmwareVersion: undefined,
+          sessions: [],
+          syncStatuses: [],
+          isLoading: false,
+          error: undefined,
+          lastSyncedAt: undefined,
+          setLoading: () => undefined,
+          setError: () => undefined,
+          setImportData: () => undefined,
+          clear: () => undefined
+        } as StravaState;
+      }
     }
   )
 );

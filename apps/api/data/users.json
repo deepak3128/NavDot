@@ -1,0 +1,26 @@
+[
+  {
+    "id": "local_37cddda0-13d0-4bd7-9756-8339d52b3d87",
+    "email": "copilot_test_1774694900@example.com",
+    "passwordHash": "$2a$12$EvQIUm.tjD2/9CJ.s7GpwOewvDx0j0OqnM6U4ttAzIzIJb5gMJNdm",
+    "fullName": "Test User",
+    "createdAt": "2026-03-28T05:18:28.949Z",
+    "updatedAt": "2026-03-28T05:18:28.949Z"
+  },
+  {
+    "id": "local_60b9dd75-4842-475d-bf02-63d501b7bda0",
+    "email": "copilot_test_1774695000@example.com",
+    "passwordHash": "$2a$12$OPs9ut3ERQg/Vv.lkejfQ.LWrJsCplykQ840UCANwnqbbTbEX8rSq",
+    "fullName": "Test User",
+    "createdAt": "2026-03-28T05:20:08.811Z",
+    "updatedAt": "2026-03-28T05:20:08.811Z"
+  },
+  {
+    "id": "local_c9141344-8d66-4de7-bce5-61d0aa881620",
+    "email": "a@gmail.com",
+    "passwordHash": "$2a$12$Vxo7RV2c5cEvTAreLCBRq.Sbnph56qbIol7wvnbqPEA4xlrBUAZUi",
+    "fullName": "Hey",
+    "createdAt": "2026-03-28T05:22:49.387Z",
+    "updatedAt": "2026-03-28T05:22:49.387Z"
+  }
+]
