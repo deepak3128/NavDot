@@ -16,8 +16,14 @@ export async function requestLocationPermissions(): Promise<boolean> {
     return false;
   }
 
-  const background = await Location.requestBackgroundPermissionsAsync();
-  return background.status === "granted";
+  // Background permission is optional for live in-app preview and ride controls.
+  try {
+    await Location.requestBackgroundPermissionsAsync();
+  } catch {
+    // Ignore background permission failures and continue with foreground-only mode.
+  }
+
+  return true;
 }
 
 export async function startLocationAndHeadingStreams(): Promise<void> {

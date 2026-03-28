@@ -10,6 +10,14 @@ type NavState = {
   isOnline: boolean;
   statusMessage: string;
   encodedTileSummary?: string;
+  isRideModeActive: boolean;
+  rideCommandToken: number;
+  destination?: {
+    latitude: number;
+    longitude: number;
+    label?: string;
+    updatedAt: string;
+  };
   setLocation: (payload: {
     latitude: number;
     longitude: number;
@@ -21,6 +29,10 @@ type NavState = {
   setIsOnline: (isOnline: boolean) => void;
   setStatusMessage: (message: string) => void;
   setEncodedTileSummary: (value?: string) => void;
+  startRideMode: () => void;
+  stopRideMode: () => void;
+  setDestination: (payload: { latitude: number; longitude: number; label?: string }) => void;
+  clearDestination: () => void;
 };
 
 export const useNavStore = create<NavState>((set) => ({
@@ -29,6 +41,8 @@ export const useNavStore = create<NavState>((set) => ({
   zoomLevel: 15,
   isOnline: true,
   statusMessage: "Waiting for GPS fix...",
+  isRideModeActive: false,
+  rideCommandToken: 0,
   setLocation: (payload) =>
     set({
       latitude: payload.latitude,
@@ -40,5 +54,21 @@ export const useNavStore = create<NavState>((set) => ({
   setZoomLevel: (zoomLevel) => set({ zoomLevel }),
   setIsOnline: (isOnline) => set({ isOnline }),
   setStatusMessage: (statusMessage) => set({ statusMessage }),
-  setEncodedTileSummary: (encodedTileSummary) => set({ encodedTileSummary })
+  setEncodedTileSummary: (encodedTileSummary) => set({ encodedTileSummary }),
+  startRideMode: () =>
+    set((state) => ({
+      isRideModeActive: true,
+      rideCommandToken: state.rideCommandToken + 1
+    })),
+  stopRideMode: () => set({ isRideModeActive: false }),
+  setDestination: (payload) =>
+    set({
+      destination: {
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+        label: payload.label,
+        updatedAt: new Date().toISOString()
+      }
+    }),
+  clearDestination: () => set({ destination: undefined })
 }));

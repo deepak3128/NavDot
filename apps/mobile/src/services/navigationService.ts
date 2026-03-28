@@ -14,6 +14,7 @@ type Snapshot = {
 
 let streamTimer: ReturnType<typeof setInterval> | undefined;
 let lastSnapshot: Snapshot = {};
+let lastDestinationSentAt: string | undefined;
 
 async function refreshTilesIfNeeded(): Promise<void> {
   const nav = useNavStore.getState();
@@ -62,12 +63,30 @@ async function sendHeadingPacket(): Promise<void> {
     return;
   }
 
+  const destination = nav.destination
+    ? {
+        latitude: nav.destination.latitude,
+        longitude: nav.destination.longitude,
+        label: nav.destination.label
+      }
+    : undefined;
+
+  if (nav.destination?.updatedAt && nav.destination.updatedAt !== lastDestinationSentAt) {
+    await bleService.writeDestinationPacket({
+      latitude: nav.destination.latitude,
+      longitude: nav.destination.longitude,
+      label: nav.destination.label ?? "selected_pin"
+    });
+    lastDestinationSentAt = nav.destination.updatedAt;
+  }
+
   await bleService.writeHeadingPacket({
     heading: nav.heading,
     latitude: nav.latitude,
     longitude: nav.longitude,
     speedMps: nav.speedMps,
-    zoom: nav.zoomLevel
+    zoom: nav.zoomLevel,
+    destination
   });
 }
 
@@ -94,17 +113,22 @@ export async function startNavigationStreaming(): Promise<void> {
   }
 
   if (!BackgroundService.isRunning()) {
-    await BackgroundService.start(backgroundTask, {
-      taskName: "NavDot Navigation",
-      taskTitle: "NavDot navigation active",
-      taskDesc: "Maintaining GPS and BLE while screen is locked",
-      taskIcon: {
-        name: "ic_launcher",
-        type: "mipmap"
-      },
-      color: "#0ea5e9",
-      linkingURI: "navdot://"
-    });
+    try {
+      await BackgroundService.start(backgroundTask, {
+        taskName: "NavDot Navigation",
+        taskTitle: "NavDot navigation active",
+        taskDesc: "Maintaining GPS and BLE while screen is locked",
+        taskIcon: {
+          name: "ic_launcher",
+          type: "mipmap"
+        },
+        color: "#0ea5e9",
+        linkingURI: "navdot://"
+      });
+    } catch {
+      // Background execution may be unavailable in some dev builds.
+      useNavStore.getState().setStatusMessage("Ride active (foreground mode). Keep app open for continuous streaming.");
+    }
   }
 }
 
@@ -117,6 +141,8 @@ export async function stopNavigationStreaming(): Promise<void> {
   if (BackgroundService.isRunning()) {
     await BackgroundService.stop();
   }
+
+  lastDestinationSentAt = undefined;
 
   useNavStore.getState().setStatusMessage("Navigation paused");
 }

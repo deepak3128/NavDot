@@ -43,7 +43,7 @@ export function SettingsScreen() {
   };
 
   return (
-    <ScrollView className="flex-1 bg-[#f3f4f6] px-5 pt-6 pb-8" contentContainerStyle={{ paddingBottom: 92 }}>
+    <ScrollView className="flex-1 bg-[#f3f4f6] px-5 pt-10 pb-8" contentContainerStyle={{ paddingBottom: 92 }}>
       <View className="absolute -left-12 -top-8 h-40 w-40 rounded-full bg-[#ffbfa5] opacity-70" />
       <View className="absolute -right-10 top-28 h-36 w-36 rounded-full bg-[#bcd5ff] opacity-70" />
 

@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { useNavigation } from "@react-navigation/native";
 import { DevicePreview } from "../components/DevicePreview";
 import {
   startNavigationStreaming,
@@ -16,7 +17,10 @@ import { useBleStore } from "../store/useBleStore";
 
 export function NavigationScreen() {
   const nav = useNavStore();
+  const navigation = useNavigation();
   const isConnected = useBleStore((state) => state.isConnected);
+  const [isRideActive, setIsRideActive] = useState(false);
+  const [rideBusy, setRideBusy] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -30,7 +34,7 @@ export function NavigationScreen() {
 
       await startLocationAndHeadingStreams();
       if (mounted) {
-        await startNavigationStreaming();
+        useNavStore.getState().setStatusMessage("Ready to ride. Tap Start Ride.");
       }
     };
 
@@ -44,12 +48,58 @@ export function NavigationScreen() {
       mounted = false;
       clearInterval(tileTimer);
       void stopNavigationStreaming();
+      setIsRideActive(false);
       stopLocationAndHeadingStreams();
     };
   }, []);
 
+  const startRide = async () => {
+    if (rideBusy || isRideActive) {
+      return;
+    }
+
+    setRideBusy(true);
+
+    try {
+      const granted = await requestLocationPermissions();
+      if (!granted) {
+        useNavStore.getState().setStatusMessage("Location permission denied. Enable location to start ride.");
+        return;
+      }
+
+      await startLocationAndHeadingStreams();
+      await startNavigationStreaming();
+      setIsRideActive(true);
+      useNavStore.getState().startRideMode();
+      useNavStore.getState().setStatusMessage("Ride started. Streaming data to NavDot.");
+      navigation.navigate("Pairing" as never);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to start ride.";
+      useNavStore.getState().setStatusMessage(`Start ride failed: ${message}`);
+      setIsRideActive(false);
+    } finally {
+      setRideBusy(false);
+    }
+  };
+
+  const endRide = async () => {
+    if (rideBusy || !isRideActive) {
+      return;
+    }
+
+    setRideBusy(true);
+    try {
+      await stopNavigationStreaming();
+      setIsRideActive(false);
+      useNavStore.getState().stopRideMode();
+      useNavStore.getState().setStatusMessage("Ride ended.");
+    } finally {
+      setRideBusy(false);
+    }
+  };
+
   return (
-    <ScrollView className="flex-1 bg-[#f3f4f6] px-5 pt-6" contentContainerStyle={{ paddingBottom: 92 }}>
+    <ScrollView className="flex-1 bg-[#f3f4f6] px-5 pt-10" contentContainerStyle={{ paddingBottom: 92 }}>
       <View className="absolute -left-10 top-16 h-36 w-36 rounded-full bg-[#ffbfa5] opacity-68" />
       <View className="absolute -right-10 -top-6 h-36 w-36 rounded-full bg-[#bcd5ff] opacity-68" />
 
@@ -93,6 +143,52 @@ export function NavigationScreen() {
         </View>
       </View>
 
+      <View className="mt-4 rounded-3xl border border-[#e5e7eb] bg-white p-5">
+        <Text className="text-xs font-bold uppercase tracking-[1.8px] text-[#6b7280]">Ride Control</Text>
+        <View className="mt-3 flex-row items-center justify-between">
+          <View>
+            <Text className="text-sm font-semibold text-[#111827]">Session</Text>
+            <Text className={`mt-1 text-xs font-bold ${isRideActive ? "text-[#15803d]" : "text-[#6b7280]"}`}>
+              {isRideActive ? "ACTIVE" : "IDLE"}
+            </Text>
+          </View>
+          <View className="flex-row gap-2">
+            <Pressable
+              className={`rounded-xl px-4 py-2.5 ${isRideActive || rideBusy ? "bg-[#d1d5db]" : "bg-[#fc4c02]"}`}
+              onPress={() => void startRide()}
+              disabled={isRideActive || rideBusy}
+            >
+              <Text className={`font-bold ${isRideActive || rideBusy ? "text-[#6b7280]" : "text-white"}`}>
+                {rideBusy && !isRideActive ? "Starting..." : "Start Ride"}
+              </Text>
+            </Pressable>
+            <Pressable
+              className={`rounded-xl border px-4 py-2.5 ${isRideActive && !rideBusy ? "border-[#111827] bg-white" : "border-[#d1d5db] bg-[#f9fafb]"}`}
+              onPress={() => void endRide()}
+              disabled={!isRideActive || rideBusy}
+            >
+              <Text className={`font-bold ${isRideActive && !rideBusy ? "text-[#111827]" : "text-[#9ca3af]"}`}>
+                {rideBusy && isRideActive ? "Ending..." : "End Ride"}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+
+      <View className="mt-4 rounded-3xl border border-[#e5e7eb] bg-white p-5">
+        <Text className="text-xs font-bold uppercase tracking-[1.8px] text-[#6b7280]">Active Destination</Text>
+        <Text className="mt-2 text-sm font-semibold text-[#111827]">
+          {nav.destination
+            ? `${nav.destination.latitude.toFixed(6)}, ${nav.destination.longitude.toFixed(6)}`
+            : "No destination selected yet"}
+        </Text>
+        <Text className="mt-1 text-xs text-[#6b7280]">
+          {nav.destination
+            ? "Navigation stream includes destination context for IoT sync."
+            : "Set a destination in Pairing tab to send route target with stream."}
+        </Text>
+      </View>
+
       <View className="mt-4">
         <DevicePreview />
       </View>
@@ -104,17 +200,12 @@ export function NavigationScreen() {
         </Text>
       </View>
 
-      <View className="mt-5 flex-row gap-3">
-        <Pressable className="flex-1 rounded-2xl bg-[#fc4c02] px-4 py-4" onPress={() => void startNavigationStreaming()}>
-          <Text className="text-center font-black tracking-wide text-white">Resume Stream</Text>
-        </Pressable>
-        <Pressable
-          className="flex-1 rounded-2xl border border-[#d1d5db] bg-white px-4 py-4"
-          onPress={() => void stopNavigationStreaming()}
-        >
-          <Text className="text-center font-bold text-[#111827]">Pause Stream</Text>
-        </Pressable>
+      <View className="mt-5 rounded-2xl border border-[#e5e7eb] bg-white px-4 py-3">
+        <Text className="text-xs text-[#6b7280]">
+          ESP32 preview updates from live GPS/heading streams. If values stay 0, check location permission and sensor access.
+        </Text>
       </View>
+
     </ScrollView>
   );
 }

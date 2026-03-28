@@ -43,12 +43,13 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <NavigationContainer theme={navTheme}>
         {!isReady ? null : !token ? (
           <AuthScreen />
         ) : (
           <Tabs.Navigator
+            initialRouteName="Pairing"
             screenOptions={({ route }) => ({
               headerStyle: {
                 backgroundColor: "#f3f4f6"
@@ -84,7 +85,7 @@ export default function App() {
               tabBarInactiveTintColor: "#9ca3af",
               tabBarIcon: ({ color, size, focused }) => {
                 const iconMap: Record<string, keyof typeof Feather.glyphMap> = {
-                  Pairing: "bluetooth",
+                  Pairing: "home",
                   Navigation: "compass",
                   Activities: "activity",
                   Settings: "sliders"
@@ -95,10 +96,17 @@ export default function App() {
               }
             })}
           >
-            <Tabs.Screen name="Pairing" component={PairingScreen} />
-            <Tabs.Screen name="Navigation" component={NavigationScreen} />
-            <Tabs.Screen name="Activities" component={StravaScreen} />
-            <Tabs.Screen name="Settings" component={SettingsScreen} />
+            <Tabs.Screen
+              name="Pairing"
+              component={PairingScreen}
+              options={{
+                title: "Home",
+                tabBarLabel: "Home"
+              }}
+            />
+            <Tabs.Screen name="Navigation" component={NavigationScreen} options={{ headerShown: false }} />
+            <Tabs.Screen name="Activities" component={StravaScreen} options={{ headerShown: false }} />
+            <Tabs.Screen name="Settings" component={SettingsScreen} options={{ headerShown: false }} />
           </Tabs.Navigator>
         )}
       </NavigationContainer>

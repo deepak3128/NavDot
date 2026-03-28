@@ -179,6 +179,11 @@ class BleService {
     longitude?: number;
     speedMps?: number;
     zoom: number;
+    destination?: {
+      latitude: number;
+      longitude: number;
+      label?: string;
+    };
   }): Promise<void> {
     if (!this.connectedDevice || !this.manager) {
       return;
@@ -190,7 +195,14 @@ class BleService {
       latitude: packet.latitude,
       longitude: packet.longitude,
       speedMps: packet.speedMps,
-      zoom: packet.zoom
+      zoom: packet.zoom,
+      destination: packet.destination
+        ? {
+            latitude: Number(packet.destination.latitude.toFixed(6)),
+            longitude: Number(packet.destination.longitude.toFixed(6)),
+            label: packet.destination.label ?? "selected_pin"
+          }
+        : undefined
     });
 
     const base64Payload = Buffer.from(payload, "utf-8").toString("base64");

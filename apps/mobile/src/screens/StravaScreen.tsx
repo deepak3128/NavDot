@@ -80,7 +80,7 @@ export function StravaScreen() {
   };
 
   return (
-    <ScrollView className="flex-1 bg-[#f3f4f6] px-5 pt-6 pb-8" contentContainerStyle={{ paddingBottom: 92 }}>
+    <ScrollView className="flex-1 bg-[#f3f4f6] px-5 pt-10 pb-8" contentContainerStyle={{ paddingBottom: 92 }}>
       <View className="absolute -left-10 -top-6 h-36 w-36 rounded-full bg-[#ffbfa5] opacity-68" />
       <View className="absolute -right-10 top-28 h-36 w-36 rounded-full bg-[#bcd5ff] opacity-68" />
 
