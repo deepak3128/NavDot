@@ -14,7 +14,7 @@ NavDot is a full-stack navigation and IoT companion app:
 2. Streams navigation context (heading + location metadata) to the connected device.
 3. Lets you pick a destination on map and send it to the device.
 4. Syncs destination events to backend (`/api/navigation/destinations`).
-5. Displays a deterministic local ride/activity snapshot in mobile UI (no external fitness API dependency).
+5. Supports optional fitness activity import in mobile UI.
 
 ## Monorepo Structure
 
@@ -76,14 +76,13 @@ DATABASE_URL="postgresql://postgres:postgres@localhost:5432/navdot?schema=public
 
 Set a real `JWT_SECRET` and confirm `DATABASE_URL` matches your local DB.
 
-Optional mobile API base override:
+## Install Dependencies
 
-Set `EXPO_PUBLIC_API_BASE_URL` before launching Expo (example values below):
+From repository root:
 
-- Android emulator: `http://10.0.2.2:4000`
-- Physical device: `http://<your-lan-ip>:4000`
-
-If omitted, mobile auto-resolves API base URL from Metro host (or platform defaults).
+```bash
+npm install
+```
 
 ## Quick Start (Copy/Paste)
 
@@ -109,7 +108,34 @@ npm run dev:mobile
 Open mobile app and verify:
 
 1. API health: http://localhost:4000/health
-2. If mobile cannot connect, set `EXPO_PUBLIC_API_BASE_URL` for your target device/emulator.
+2. Mobile Settings -> API base URL is correct for your device/emulator.
+
+## Database Setup (Prisma)
+
+From repository root:
+
+```bash
+npm run prisma:generate -w apps/api
+npm run prisma:migrate -w apps/api
+```
+
+This generates Prisma client and applies the initial schema migration.
+
+## Run the App (Local Development)
+
+Terminal 1: start API
+
+```bash
+npm run dev:api
+```
+
+Terminal 2: start mobile
+
+```bash
+npm run dev:mobile
+```
+
+Then open the Expo app via Android/iOS/web shortcut from terminal.
 
 ## Commands Reference
 
@@ -200,6 +226,61 @@ Base URL (local): `http://localhost:4000`
 - `GET /api/navigation/destinations/:deviceId`
 	- Returns recent destinations for that device.
 
+## API cURL Examples
+
+Assumption: API is running at `http://localhost:4000`.
+
+Health:
+
+```bash
+curl http://localhost:4000/health
+```
+
+Register:
+
+```bash
+curl -X POST http://localhost:4000/api/auth/register \
+	-H "Content-Type: application/json" \
+	-d '{"email":"user@example.com","password":"password123","fullName":"Nav User"}'
+```
+
+Login:
+
+```bash
+curl -X POST http://localhost:4000/api/auth/login \
+	-H "Content-Type: application/json" \
+	-d '{"email":"user@example.com","password":"password123"}'
+```
+
+Profile (replace TOKEN):
+
+```bash
+curl http://localhost:4000/api/auth/profile \
+	-H "Authorization: Bearer TOKEN"
+```
+
+Ingest BLE coordinate event:
+
+```bash
+curl -X POST http://localhost:4000/api/ble/coordinates \
+	-H "Content-Type: application/json" \
+	-d '{"deviceId":"device-123","latitude":28.6139,"longitude":77.2090,"altitude":218.2}'
+```
+
+Create destination:
+
+```bash
+curl -X POST http://localhost:4000/api/navigation/destinations \
+	-H "Content-Type: application/json" \
+	-d '{"deviceId":"device-123","latitude":28.6139,"longitude":77.2090,"label":"selected_pin","source":"mobile-map"}'
+```
+
+Get destination history:
+
+```bash
+curl http://localhost:4000/api/navigation/destinations/device-123
+```
+
 ## Database Models (Current)
 
 Prisma schema currently defines:
@@ -207,10 +288,7 @@ Prisma schema currently defines:
 1. `User`
 2. `CoordinateEvent`
 
-Notes:
-
-- navigation destinations are currently stored in in-memory API store (not persisted in Postgres yet).
-- auth reads/writes Postgres via Prisma when available; if DB/Prisma is unavailable locally, it transparently falls back to `apps/api/data/users.json`.
+Note: navigation destinations are currently stored in in-memory API store (not persisted in Postgres yet).
 
 ## Mobile Feature Map
 
@@ -229,13 +307,14 @@ Notes:
 
 ### Activities Tab
 
-- Loads deterministic local ride/session snapshot data
-- Displays ride/session and device sync cards
+- Imports external activity/routes data into local store
+- Displays activity and route cards
 
 ### Settings Tab
 
 - Zoom, dim timeout, schedule, units
-- Account logout
+- Fitness access token field
+- API base URL field (`apiBaseUrl`)
 
 ## Troubleshooting
 
@@ -246,10 +325,9 @@ If you see BLE module unavailable errors, run a development build. Expo Go does 
 ### Mobile cannot reach API
 
 1. Ensure API is running on port `4000`.
-2. Verify mobile API base URL resolution:
+2. In mobile Settings, verify API base URL:
 	 - Android emulator: `http://10.0.2.2:4000`
-	 - Physical device: use your machine LAN IP (for example `http://192.168.1.10:4000`)
-	 - You can force the value with `EXPO_PUBLIC_API_BASE_URL`
+	 - Physical device: use your machine LAN IP
 
 ### Prisma/database issues
 
@@ -261,8 +339,6 @@ If you see BLE module unavailable errors, run a development build. Expo Go does 
 npm run prisma:generate -w apps/api
 npm run prisma:migrate -w apps/api
 ```
-
-If Prisma is not initialized or DB is intentionally unavailable in local development, auth still works via file fallback store at `apps/api/data/users.json`.
 
 ## Next Production Steps
 

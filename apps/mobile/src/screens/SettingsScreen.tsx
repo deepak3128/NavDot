@@ -1,4 +1,5 @@
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { DevicePreview } from "../components/DevicePreview";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useNavStore } from "../store/useNavStore";
 import { useAuthStore } from "../store/useAuthStore";
@@ -125,6 +126,10 @@ export function SettingsScreen() {
         <Pressable className="mt-3 rounded-xl bg-[#111827] px-3 py-3" onPress={clearSession}>
           <Text className="text-center font-bold text-white">Logout</Text>
         </Pressable>
+      </View>
+
+      <View className="mt-5">
+        <DevicePreview />
       </View>
     </ScrollView>
   );

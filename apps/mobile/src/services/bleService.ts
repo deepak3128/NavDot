@@ -13,7 +13,6 @@ const NAVDOT_HEADING_CHAR_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
 class BleService {
   private manager?: import("react-native-ble-plx").BleManager;
   private connectedDevice?: import("react-native-ble-plx").Device;
-  private scanStopTimer?: ReturnType<typeof setTimeout>;
 
   constructor() {
     if (!bleModule) {
@@ -60,7 +59,7 @@ class BleService {
     return permissions.every((permission) => result[permission] === PermissionsAndroid.RESULTS.GRANTED);
   }
 
-  async waitForPoweredOn(timeoutMs = 8000): Promise<void> {
+  async waitForPoweredOn(): Promise<void> {
     if (!this.ensureAvailable()) {
       return;
     }
@@ -71,15 +70,9 @@ class BleService {
       return;
     }
 
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        subscription.remove();
-        reject(new Error("Bluetooth is turned off. Turn it on and try scanning again."));
-      }, timeoutMs);
-
+    await new Promise<void>((resolve) => {
       const subscription = manager.onStateChange((nextState) => {
         if (nextState === "PoweredOn") {
-          clearTimeout(timeout);
           subscription.remove();
           resolve();
         }
@@ -93,7 +86,6 @@ class BleService {
     }
 
     const manager = this.manager!;
-    this.stopScan();
 
     const store = useBleStore.getState();
     store.setDevices([]);
@@ -101,16 +93,11 @@ class BleService {
     store.setError(undefined);
 
     const seen = new Map<string, { id: string; name: string; rssi: number }>();
-    let foundTargetDevice = false;
 
-    manager.startDeviceScan(null, null, (error, device) => {
+    manager.startDeviceScan([NAVDOT_SERVICE_UUID], null, (error, device) => {
       if (error) {
         useBleStore.getState().setError(error.message);
         useBleStore.getState().setScanning(false);
-        if (this.scanStopTimer) {
-          clearTimeout(this.scanStopTimer);
-          this.scanStopTimer = undefined;
-        }
         return;
       }
 
@@ -118,18 +105,7 @@ class BleService {
         return;
       }
 
-      const rawName = device.name || device.localName || "";
-      const normalizedName = rawName.toLowerCase();
-      const serviceUuids = (device.serviceUUIDs ?? []).map((uuid) => uuid.toUpperCase());
-      const hasExpectedService = serviceUuids.includes(NAVDOT_SERVICE_UUID);
-      const hasExpectedName = /(navdot|esp32|esp-32|esp)/i.test(normalizedName);
-
-      if (!hasExpectedService && !hasExpectedName) {
-        return;
-      }
-
-      foundTargetDevice = true;
-      const name = rawName || "NavDot device";
+      const name = device.name || device.localName || "NavDot device";
       const rssi = device.rssi ?? -100;
       seen.set(device.id, { id: device.id, name, rssi });
 
@@ -137,24 +113,14 @@ class BleService {
       useBleStore.getState().setDevices(devices);
     });
 
-    this.scanStopTimer = setTimeout(() => {
+    setTimeout(() => {
       this.stopScan();
-      if (!foundTargetDevice) {
-        useBleStore
-          .getState()
-          .setError("No compatible BLE devices found. Keep the ESP32 powered and advertising, then scan again.");
-      }
     }, 10000);
   }
 
   stopScan(): void {
     if (!this.manager) {
       return;
-    }
-
-    if (this.scanStopTimer) {
-      clearTimeout(this.scanStopTimer);
-      this.scanStopTimer = undefined;
     }
 
     this.manager.stopDeviceScan();
