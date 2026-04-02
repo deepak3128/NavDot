@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import * as Location from "expo-location";
 import MapView, { LongPressEvent, Marker, Polyline, Region } from "react-native-maps";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { bleService } from "../services/bleService";
 import { sendDestinationToBackend } from "../services/backendService";
 import { useBleStore } from "../store/useBleStore";
 import { useNavStore } from "../store/useNavStore";
+import { useSettingsStore } from "../store/useSettingsStore";
 import { haversineDistanceMeters } from "../utils/geo";
 
 const DEFAULT_REGION: Region = {
@@ -15,6 +16,18 @@ const DEFAULT_REGION: Region = {
   latitudeDelta: 0.02,
   longitudeDelta: 0.02
 };
+
+const DARK_MAP_STYLE = [
+  { elementType: "geometry", stylers: [{ color: "#1f2937" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#d1d5db" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#111827" }] },
+  { featureType: "administrative", elementType: "geometry", stylers: [{ color: "#374151" }] },
+  { featureType: "poi", elementType: "geometry", stylers: [{ color: "#111827" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#374151" }] },
+  { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#1f2937" }] },
+  { featureType: "transit", elementType: "geometry", stylers: [{ color: "#111827" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#0f172a" }] }
+];
 
 type SearchResult = {
   id: string;
@@ -32,6 +45,7 @@ type RouteOption = {
 };
 
 export function HomeScreen() {
+  const isDark = useSettingsStore((state) => state.themeMode === "dark");
   const [busyId, setBusyId] = useState<string | undefined>();
   const [mapRegion, setMapRegion] = useState<Region>(DEFAULT_REGION);
   const [selectedDestination, setSelectedDestination] = useState<{ latitude: number; longitude: number }>();
@@ -58,9 +72,11 @@ export function HomeScreen() {
   const navDestination = useNavStore((state) => state.destination);
   const isRideModeActive = useNavStore((state) => state.isRideModeActive);
   const rideCommandToken = useNavStore((state) => state.rideCommandToken);
+  const navigation = useNavigation();
   const mapRef = useRef<MapView | null>(null);
   const routeAbortRef = useRef<AbortController | null>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
+  const searchInputRef = useRef<TextInput | null>(null);
   const hasCenteredToCurrentRef = useRef(false);
   const selectedDestinationRef = useRef<{ latitude: number; longitude: number } | undefined>(undefined);
   const lastRouteRefreshAtRef = useRef(0);
@@ -158,7 +174,6 @@ export function HomeScreen() {
       if (route.etaSeconds < routeOptions[fastestIndex].etaSeconds) {
         fastestIndex = index;
       }
-
       if (route.distanceMeters < routeOptions[shortestIndex].distanceMeters) {
         shortestIndex = index;
       }
@@ -515,6 +530,24 @@ export function HomeScreen() {
   useEffect(() => {
     let locationSubscription: Location.LocationSubscription | undefined;
 
+    const syncCurrentLocation = (location: Location.LocationObject | Location.LocationObjectCoords) => {
+      const coords = "coords" in location ? location.coords : location;
+
+      setMapRegion((previous) => ({
+        ...previous,
+        latitude: coords.latitude,
+        longitude: coords.longitude
+      }));
+
+      setCurrentPosition({
+        latitude: coords.latitude,
+        longitude: coords.longitude
+      });
+      setCurrentSpeedMps(coords.speed ?? 0);
+      setGpsStatus("Current location synced.");
+      maybeCenterToCurrent(coords.latitude, coords.longitude);
+    };
+
     const maybeCenterToCurrent = (latitude: number, longitude: number) => {
       if (hasCenteredToCurrentRef.current || selectedDestinationRef.current) {
         return;
@@ -539,23 +572,33 @@ export function HomeScreen() {
         return;
       }
 
-      const current = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        setGpsStatus("Location services are off. Turn on GPS to auto-fetch current location.");
+        return;
+      }
+
+      const lastKnown = await Location.getLastKnownPositionAsync({
+        maxAge: 5 * 60 * 1000,
+        requiredAccuracy: 200
       });
 
-      setMapRegion((previous) => ({
-        ...previous,
-        latitude: current.coords.latitude,
-        longitude: current.coords.longitude
-      }));
+      if (lastKnown) {
+        syncCurrentLocation(lastKnown);
+      } else {
+        setGpsStatus("Fetching current location...");
+      }
 
-      setCurrentPosition({
-        latitude: current.coords.latitude,
-        longitude: current.coords.longitude
-      });
-      setCurrentSpeedMps(current.coords.speed ?? 0);
-      setGpsStatus("Current location synced.");
-      maybeCenterToCurrent(current.coords.latitude, current.coords.longitude);
+      try {
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced
+        });
+        syncCurrentLocation(current);
+      } catch {
+        if (!lastKnown) {
+          setGpsStatus("Waiting for GPS fix...");
+        }
+      }
 
       locationSubscription = await Location.watchPositionAsync(
         {
@@ -564,13 +607,7 @@ export function HomeScreen() {
           distanceInterval: 2
         },
         (location) => {
-          setCurrentPosition({
-            latitude: location.coords.latitude,
-            longitude: location.coords.longitude
-          });
-          setCurrentSpeedMps(location.coords.speed ?? 0);
-          setGpsStatus("Current location synced.");
-          maybeCenterToCurrent(location.coords.latitude, location.coords.longitude);
+          syncCurrentLocation(location);
         }
       );
     };
@@ -735,6 +772,12 @@ export function HomeScreen() {
         return;
       }
 
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        setGpsStatus("Location services are off. Turn on GPS to recenter.");
+        return;
+      }
+
       const current = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced
       });
@@ -789,14 +832,50 @@ export function HomeScreen() {
     }
   };
 
+  const executeSearchSubmit = () => {
+    const first = searchResults[0];
+    if (first) {
+      setSearchQuery(first.label);
+      setSearchResults([]);
+      applyDestination({ latitude: first.latitude, longitude: first.longitude });
+      return;
+    }
+
+    const query = searchQuery.trim();
+    if (!query) {
+      return;
+    }
+
+    void Location.geocodeAsync(query).then((fallback) => {
+      const firstFallback = fallback[0];
+      if (!firstFallback) {
+        setSearchError("No matching location found.");
+        return;
+      }
+
+      setSearchError(undefined);
+      applyDestination({
+        latitude: firstFallback.latitude,
+        longitude: firstFallback.longitude
+      });
+    });
+  };
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerRight: undefined
+    });
+  }, [navigation]);
+
   return (
-    <View className="flex-1 bg-[#f3f4f6]">
-      <View className="h-[48%] overflow-hidden rounded-b-[28px]">
+    <View className={`flex-1 ${isDark ? "bg-[#0b1220]" : "bg-[#f3f4f6]"}`}>
+      <View className="h-[56%] overflow-hidden">
         <MapView
           ref={(instance) => {
             mapRef.current = instance;
           }}
           style={{ flex: 1 }}
+          customMapStyle={isDark ? DARK_MAP_STYLE : []}
           initialRegion={mapRegion}
           onLongPress={selectDestination}
           showsUserLocation
@@ -812,13 +891,15 @@ export function HomeScreen() {
           {selectedDestination ? <Marker coordinate={selectedDestination} title="Selected destination" /> : null}
         </MapView>
 
-        {showHubCard ? (
-          <View pointerEvents="none" className="absolute left-5 right-5 top-4 rounded-2xl bg-[#fc4c02]/95 px-4 py-3">
-            <Text className="text-[11px] font-extrabold uppercase tracking-[1.8px] text-[#ffedd5]">Navigation Hub</Text>
-            <Text className="mt-1 text-xl font-black text-white">Send Route To Handlebar Device</Text>
-            <Text className="mt-1 text-xs text-[#fff7ed]">Long-press map to pin destination, then tap Send To Device.</Text>
-          </View>
-        ) : null}
+        <View className="absolute left-5 right-5 top-4">
+          {showHubCard ? (
+            <View pointerEvents="none" className="mt-2 rounded-2xl bg-[#fc4c02]/95 px-4 py-3">
+              <Text className="text-[11px] font-extrabold uppercase tracking-[1.8px] text-[#ffedd5]">Navigation Hub</Text>
+              <Text className="mt-1 text-xl font-black text-white">Send Route To Handlebar Device</Text>
+              <Text className="mt-1 text-xs text-[#fff7ed]">Long-press map to pin destination, then tap Send To Device.</Text>
+            </View>
+          ) : null}
+        </View>
 
         <Pressable
           className="absolute bottom-5 right-5 h-12 w-12 items-center justify-center rounded-full border border-[#d1d5db] bg-white"
@@ -844,7 +925,7 @@ export function HomeScreen() {
         </Pressable>
       </View>
 
-      <View className="-mt-6 flex-1 rounded-t-[28px] border border-[#e5e7eb] bg-white">
+      <View className={`-mt-0 flex-1 rounded-t-[28px] border ${isDark ? "border-[#1f2937] bg-[#111827]" : "border-[#e5e7eb] bg-white"}`}>
         <ScrollView
           className="flex-1 px-5 pt-4"
           contentContainerStyle={{ paddingBottom: 120 }}
@@ -891,86 +972,110 @@ export function HomeScreen() {
             </Pressable>
           </View>
 
-          <View className="mt-3 rounded-xl bg-[#f9fafb] px-3 py-3">
-            <Text className="text-[11px] uppercase tracking-wide text-[#6b7280]">Search Destination</Text>
-            <TextInput
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              placeholder="Search place or address"
-              placeholderTextColor="#9ca3af"
-              autoCapitalize="none"
-              autoCorrect={false}
-              returnKeyType="search"
-              onSubmitEditing={() => {
-                const first = searchResults[0];
-                if (first) {
-                  setSearchQuery(first.label);
-                  setSearchResults([]);
-                  applyDestination({ latitude: first.latitude, longitude: first.longitude });
-                  return;
-                }
+          <View
+            className="mt-3 rounded-[28px] border border-[#e5e7eb] bg-white px-3 py-3"
+            style={{
+              shadowColor: "#111827",
+              shadowOpacity: 0.08,
+              shadowRadius: 14,
+              shadowOffset: { width: 0, height: 5 },
+              elevation: 5
+            }}
+          >
+            <View className="flex-row items-start justify-between">
+              <View>
+                <Text className="text-[10px] uppercase tracking-[1.6px] text-[#6b7280]">Search</Text>
+                <Text className="mt-1 text-xs text-[#4b5563]">Quick search, thumb friendly.</Text>
+              </View>
+              <View className="rounded-full bg-[#f8fafc] px-2.5 py-1">
+                <Text className="text-[10px] font-bold text-[#6b7280]">Options</Text>
+              </View>
+            </View>
 
-                const query = searchQuery.trim();
-                if (!query) {
-                  return;
-                }
+            <View className="mt-2 flex-row items-center gap-2">
+              <View className="h-11 flex-1 flex-row items-center rounded-full border border-[#d1d5db] bg-[#f9fafb] px-3">
+                <Text className="mr-2 text-base text-[#9ca3af]">⌕</Text>
+                <TextInput
+                  ref={(instance) => {
+                    searchInputRef.current = instance;
+                  }}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="Where to?"
+                  placeholderTextColor="#9ca3af"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="search"
+                  onSubmitEditing={executeSearchSubmit}
+                  className="flex-1 text-[15px] text-[#111827]"
+                />
+              </View>
 
-                void Location.geocodeAsync(query).then((fallback) => {
-                  const firstFallback = fallback[0];
-                  if (!firstFallback) {
-                    setSearchError("No matching location found.");
-                    return;
-                  }
+              <Pressable
+                className="h-11 w-14 items-center justify-center rounded-full bg-[#facc15]"
+                onPress={() => {
+                  void executeSearchSubmit();
+                }}
+              >
+                <Text className="text-[12px] font-black text-[#111827]">Go</Text>
+              </Pressable>
+            </View>
 
-                  setSearchError(undefined);
-                  applyDestination({
-                    latitude: firstFallback.latitude,
-                    longitude: firstFallback.longitude
-                  });
-                });
-              }}
-              className="mt-2 rounded-xl border border-[#d1d5db] bg-white px-3 py-2.5 text-[#111827]"
-            />
-            <Text className="mt-2 text-xs text-[#4b5563]">{gpsStatus}</Text>
             {searchLoading ? <Text className="mt-2 text-xs text-[#0369a1]">Searching...</Text> : null}
             {searchError ? <Text className="mt-2 text-xs text-[#b45309]">{searchError}</Text> : null}
             {searchResults.length ? (
-              <View className="mt-2 gap-1">
-                {searchResults.map((result) => (
-                  <Pressable
-                    key={result.id}
-                    className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2"
-                    onPress={() => {
-                      setSearchQuery(result.label);
-                      setSearchResults([]);
-                      applyDestination({ latitude: result.latitude, longitude: result.longitude });
-                    }}
-                  >
-                    <Text className="text-xs text-[#111827]" numberOfLines={2}>{result.label}</Text>
-                  </Pressable>
-                ))}
+              <View className="mt-2 gap-1" style={{ maxHeight: 150 }}>
+                <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false}>
+                  {searchResults.map((result) => (
+                    <Pressable
+                      key={result.id}
+                      className="mb-1 rounded-xl border border-[#e5e7eb] bg-white px-3 py-2.5"
+                      onPress={() => {
+                        setSearchQuery(result.label);
+                        setSearchResults([]);
+                        applyDestination({ latitude: result.latitude, longitude: result.longitude });
+                      }}
+                    >
+                      <Text className="text-xs text-[#111827]" numberOfLines={2}>{result.label}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
               </View>
             ) : null}
+
+            <View className="mt-3 flex-row items-end justify-between">
+              <View>
+                <Text className="text-[10px] uppercase tracking-[1.6px] text-[#6b7280]">Route</Text>
+                <Text className="mt-1 text-xs text-[#4b5563]">{gpsStatus}</Text>
+              </View>
+
+              <View className="flex-row items-center gap-2">
+                <View className="rounded-2xl bg-[#f9fafb] px-2.5 py-1.5">
+                  <Text className="text-[9px] uppercase text-[#6b7280]">ETA</Text>
+                  <Text className="text-xs font-bold text-[#111827]">
+                    {routeMetrics ? `${Math.max(1, Math.round(routeMetrics.etaSeconds / 60))} min` : "-"}
+                  </Text>
+                </View>
+                <View className="rounded-2xl bg-[#f9fafb] px-2.5 py-1.5">
+                  <Text className="text-[9px] uppercase text-[#6b7280]">Km</Text>
+                  <Text className="text-xs font-bold text-[#111827]">
+                    {routeMetrics ? `${(routeMetrics.distanceMeters / 1000).toFixed(1)}` : "-"}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
             <View className="mt-2 flex-row flex-wrap gap-2">
-              <View className="rounded-lg bg-white px-2.5 py-1.5">
-                <Text className="text-[10px] uppercase text-[#6b7280]">Distance</Text>
-                <Text className="text-xs font-bold text-[#111827]">
-                  {routeMetrics ? `${(routeMetrics.distanceMeters / 1000).toFixed(2)} km` : "-"}
-                </Text>
-              </View>
-              <View className="rounded-lg bg-white px-2.5 py-1.5">
-                <Text className="text-[10px] uppercase text-[#6b7280]">ETA</Text>
-                <Text className="text-xs font-bold text-[#111827]">
-                  {routeMetrics
-                    ? `${Math.max(1, Math.round(routeMetrics.etaSeconds / 60))} min`
-                    : "-"}
-                </Text>
-              </View>
-              <View className="rounded-lg bg-white px-2.5 py-1.5">
+              <View className="rounded-full bg-[#f9fafb] px-2.5 py-1.5">
                 <Text className="text-[10px] uppercase text-[#6b7280]">Heading</Text>
                 <Text className="text-xs font-bold text-[#111827]">{routeMetrics ? `${routeMetrics.headingDeg}°` : "-"}</Text>
               </View>
+              <View className="rounded-full bg-[#f9fafb] px-2.5 py-1.5">
+                <Text className="text-[10px] uppercase text-[#6b7280]">Status</Text>
+                <Text className="text-xs font-bold text-[#111827]">{routeLoading ? "Loading" : "Ready"}</Text>
+              </View>
             </View>
+
             {routeOptions.length > 1 ? (
               <View className="mt-2">
                 <Text className="text-[10px] uppercase tracking-wide text-[#6b7280]">Choose Route</Text>
@@ -1005,6 +1110,7 @@ export function HomeScreen() {
                 </View>
               </View>
             ) : null}
+
             {routeLoading ? <Text className="mt-2 text-xs text-[#0369a1]">Calculating bike road route...</Text> : null}
             {routeError ? <Text className="mt-2 text-xs text-[#b45309]">{routeError}</Text> : null}
           </View>

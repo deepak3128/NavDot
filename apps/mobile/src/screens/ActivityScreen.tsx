@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { loadRideActivitySnapshot } from "../services/activityService";
 import { useActivityStore } from "../store/useActivityStore";
+import { useSettingsStore } from "../store/useSettingsStore";
 
 type Segment = "rides" | "device";
 
@@ -47,6 +48,7 @@ function formatSyncLabel(iso?: string): string {
 
 export function ActivityScreen() {
   const [segment, setSegment] = useState<Segment>("rides");
+  const isDark = useSettingsStore((state) => state.themeMode === "dark");
 
   const { deviceName, firmwareVersion, sessions, syncStatuses, isLoading, error, setError, setLoading, setImportData } =
     useActivityStore();
@@ -80,21 +82,24 @@ export function ActivityScreen() {
   };
 
   return (
-    <ScrollView className="flex-1 bg-[#f3f4f6] px-5 pt-10 pb-8" contentContainerStyle={{ paddingBottom: 92 }}>
-      <View className="absolute -left-10 -top-6 h-36 w-36 rounded-full bg-[#ffbfa5] opacity-68" />
-      <View className="absolute -right-10 top-28 h-36 w-36 rounded-full bg-[#bcd5ff] opacity-68" />
+    <ScrollView
+      className={`flex-1 px-5 pt-10 pb-8 ${isDark ? "bg-[#0b1220]" : "bg-[#f3f4f6]"}`}
+      contentContainerStyle={{ paddingBottom: 92 }}
+    >
+      <View className={`absolute -left-10 -top-6 h-36 w-36 rounded-full ${isDark ? "bg-[#1f2937]" : "bg-[#ffbfa5]"} opacity-68`} />
+      <View className={`absolute -right-10 top-28 h-36 w-36 rounded-full ${isDark ? "bg-[#1e3a8a]" : "bg-[#bcd5ff]"} opacity-68`} />
 
-      <Text className="text-3xl font-black tracking-tight text-[#111827]">Activity</Text>
-      <Text className="mt-1 text-sm leading-6 text-[#4b5563]">
+      <Text className={`text-3xl font-black tracking-tight ${isDark ? "text-[#f9fafb]" : "text-[#111827]"}`}>Activity</Text>
+      <Text className={`mt-1 text-sm leading-6 ${isDark ? "text-[#9ca3af]" : "text-[#4b5563]"}`}>
         Track bike navigation rides and instruction delivery health for your connected IoT device.
       </Text>
 
-      <View className="mt-5 overflow-hidden rounded-3xl border border-[#e5e7eb] bg-white p-5">
-        <View className="absolute -right-8 -top-8 h-20 w-20 rounded-full bg-[#ffbfa5] opacity-70" />
-        <Text className="text-xs font-bold uppercase tracking-[1.8px] text-[#6b7280]">IoT Device</Text>
-        <Text className="mt-2 text-xl font-extrabold text-[#111827]">{title}</Text>
-        <Text className="mt-1 text-xs text-[#6b7280]">Firmware {firmwareVersion ?? "unknown"}</Text>
-        <Text className="mt-1 text-xs text-[#6b7280]">{formatSyncLabel(lastSyncedAt)}</Text>
+      <View className={`mt-5 overflow-hidden rounded-3xl border p-5 ${isDark ? "border-[#1f2937] bg-[#111827]" : "border-[#e5e7eb] bg-white"}`}>
+        <View className={`absolute -right-8 -top-8 h-20 w-20 rounded-full ${isDark ? "bg-[#1e3a8a]" : "bg-[#ffbfa5]"} opacity-70`} />
+        <Text className={`text-xs font-bold uppercase tracking-[1.8px] ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>IoT Device</Text>
+        <Text className={`mt-2 text-xl font-extrabold ${isDark ? "text-[#f9fafb]" : "text-[#111827]"}`}>{title}</Text>
+        <Text className={`mt-1 text-xs ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Firmware {firmwareVersion ?? "unknown"}</Text>
+        <Text className={`mt-1 text-xs ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>{formatSyncLabel(lastSyncedAt)}</Text>
 
         <Pressable
           className="mt-4 rounded-2xl bg-[#fc4c02] px-4 py-3"
@@ -110,12 +115,12 @@ export function ActivityScreen() {
         {error ? <Text className="mt-3 text-sm text-[#dc2626]">{error}</Text> : null}
       </View>
 
-      <View className="mt-5 flex-row rounded-2xl border border-[#e5e7eb] bg-white p-1">
+      <View className={`mt-5 flex-row rounded-2xl border p-1 ${isDark ? "border-[#1f2937] bg-[#111827]" : "border-[#e5e7eb] bg-white"}`}>
         <Pressable
           className={`flex-1 rounded-xl px-3 py-2 ${segment === "rides" ? "bg-[#fc4c02]" : "bg-transparent"}`}
           onPress={() => setSegment("rides")}
         >
-          <Text className={`text-center font-semibold ${segment === "rides" ? "text-white" : "text-[#6b7280]"}`}>
+            <Text className={`text-center font-semibold ${segment === "rides" ? "text-white" : isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>
             Ride Logs ({sessions.length})
           </Text>
         </Pressable>
@@ -123,7 +128,7 @@ export function ActivityScreen() {
           className={`flex-1 rounded-xl px-3 py-2 ${segment === "device" ? "bg-[#fc4c02]" : "bg-transparent"}`}
           onPress={() => setSegment("device")}
         >
-          <Text className={`text-center font-semibold ${segment === "device" ? "text-white" : "text-[#6b7280]"}`}>
+            <Text className={`text-center font-semibold ${segment === "device" ? "text-white" : isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>
             Device Sync ({syncStatuses.length})
           </Text>
         </Pressable>
