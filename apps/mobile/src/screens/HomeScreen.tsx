@@ -11,12 +11,14 @@ import {
   TextInput,
   View
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
-import MapView, { LongPressEvent, Marker, Polyline, Region } from "react-native-maps";
+import MapView, { LongPressEvent, MapPressEvent, Marker, Polyline, Region } from "react-native-maps";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { bleService } from "../services/bleService";
 import { sendDestinationToBackend } from "../services/backendService";
 import { useBleStore } from "../store/useBleStore";
+import { usePlacesStore } from "../store/usePlacesStore";
 import { useNavStore } from "../store/useNavStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { haversineDistanceMeters } from "../utils/geo";
@@ -27,6 +29,9 @@ const DEFAULT_REGION: Region = {
   latitudeDelta: 0.02,
   longitudeDelta: 0.02
 };
+
+const RECENT_SEARCHES_STORAGE_KEY = "navdot-recent-searches";
+const ORIGIN_STORAGE_KEY = "navdot-custom-origin";
 
 const DARK_MAP_STYLE = [
   { elementType: "geometry", stylers: [{ color: "#1f2937" }] },
@@ -69,6 +74,19 @@ type RouteOption = {
   nextTurnDistanceMeters: number;
 };
 
+type RoutePreference = "recommended" | "fastest" | "shortest";
+
+function distanceToRouteMeters(position: RoutePoint, path: RoutePoint[]): number {
+  if (!path.length) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  return path.reduce((minimum, point) => {
+    const distance = haversineDistanceMeters(position, point);
+    return Math.min(minimum, distance);
+  }, Number.MAX_SAFE_INTEGER);
+}
+
 export function HomeScreen() {
   const isDark = useSettingsStore((state) => state.themeMode === "dark");
   const [busyId, setBusyId] = useState<string | undefined>();
@@ -82,6 +100,7 @@ export function HomeScreen() {
   const [selectedOrigin, setSelectedOrigin] = useState<{ latitude: number; longitude: number; label?: string }>();
   const [currentSpeedMps, setCurrentSpeedMps] = useState<number>(0);
   const [routeOptions, setRouteOptions] = useState<RouteOption[]>([]);
+  const [routePreference, setRoutePreference] = useState<RoutePreference>("recommended");
   const [activeRouteIndex, setActiveRouteIndex] = useState(0);
   const [routePath, setRoutePath] = useState<Array<{ latitude: number; longitude: number }>>([]);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -95,6 +114,8 @@ export function HomeScreen() {
   const [activeSearchField, setActiveSearchField] = useState<"from" | "to">("to");
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
+  const [favoriteLabelInput, setFavoriteLabelInput] = useState("");
+  const [isFavoriteModalOpen, setIsFavoriteModalOpen] = useState(false);
   const [gpsStatus, setGpsStatus] = useState("Auto-fetching current location...");
   const { devices, isScanning, isConnected, connectedDeviceId, connectedDeviceName, preferredDeviceName, error } =
     useBleStore();
@@ -105,6 +126,8 @@ export function HomeScreen() {
   const setNavigationRoute = useNavStore((state) => state.setNavigationRoute);
   const setNavigationTelemetry = useNavStore((state) => state.setNavigationTelemetry);
   const resetNavigationRoute = useNavStore((state) => state.resetNavigationRoute);
+  const savedPlaces = usePlacesStore((state) => state.savedPlaces);
+  const upsertSavedPlace = usePlacesStore((state) => state.upsertSavedPlace);
   const navigation = useNavigation();
   const mapRef = useRef<MapView | null>(null);
   const bottomScrollRef = useRef<ScrollView | null>(null);
@@ -116,6 +139,8 @@ export function HomeScreen() {
   const hasCenteredToCurrentRef = useRef(false);
   const selectedDestinationRef = useRef<{ latitude: number; longitude: number } | undefined>(undefined);
   const lastRouteRefreshAtRef = useRef(0);
+  const lastOffRouteRef = useRef(0);
+  const pendingFavoriteDestinationRef = useRef<{ latitude: number; longitude: number } | undefined>(undefined);
 
   useEffect(() => {
     selectedDestinationRef.current = selectedDestination;
@@ -141,6 +166,77 @@ export function HomeScreen() {
       };
     });
   }, [navDestination]);
+
+  useEffect(() => {
+    const hydrateSearchState = async () => {
+      try {
+        const [recentRaw, originRaw] = await Promise.all([
+          AsyncStorage.getItem(RECENT_SEARCHES_STORAGE_KEY),
+          AsyncStorage.getItem(ORIGIN_STORAGE_KEY)
+        ]);
+
+        if (recentRaw) {
+          const parsed = JSON.parse(recentRaw) as RecentSearch[];
+          if (Array.isArray(parsed)) {
+            setRecentSearches(parsed.slice(0, 6));
+          }
+        }
+
+        if (originRaw) {
+          const parsed = JSON.parse(originRaw) as { latitude: number; longitude: number; label?: string };
+          if (Number.isFinite(parsed.latitude) && Number.isFinite(parsed.longitude)) {
+            setSelectedOrigin({
+              latitude: parsed.latitude,
+              longitude: parsed.longitude,
+              label: parsed.label
+            });
+            if (parsed.label) {
+              setOriginQuery(parsed.label);
+            }
+          }
+        }
+      } catch {
+        // Ignore persistence restore errors.
+      }
+    };
+
+    void hydrateSearchState();
+  }, []);
+
+  useEffect(() => {
+    void AsyncStorage.setItem(RECENT_SEARCHES_STORAGE_KEY, JSON.stringify(recentSearches));
+  }, [recentSearches]);
+
+  useEffect(() => {
+    if (!selectedOrigin) {
+      void AsyncStorage.removeItem(ORIGIN_STORAGE_KEY);
+      return;
+    }
+
+    void AsyncStorage.setItem(ORIGIN_STORAGE_KEY, JSON.stringify(selectedOrigin));
+  }, [selectedOrigin]);
+
+  useEffect(() => {
+    if (!routeOptions.length) {
+      return;
+    }
+
+    if (routePreference === "recommended") {
+      setActiveRouteIndex(0);
+      return;
+    }
+
+    const targetIndex = routeOptions.reduce((bestIndex, route, index) => {
+      const best = routeOptions[bestIndex];
+      if (routePreference === "fastest") {
+        return route.etaSeconds < best.etaSeconds ? index : bestIndex;
+      }
+
+      return route.distanceMeters < best.distanceMeters ? index : bestIndex;
+    }, 0);
+
+    setActiveRouteIndex(targetIndex);
+  }, [routeOptions, routePreference]);
 
   useEffect(() => {
     const active = routeOptions[activeRouteIndex];
@@ -243,6 +339,19 @@ export function HomeScreen() {
       return tags;
     });
   }, [routeOptions]);
+
+  const matchingSavedPlaces = useMemo(() => {
+    const query = (activeSearchField === "from" ? originQuery : searchQuery).trim().toLowerCase();
+    if (!query) {
+      return savedPlaces;
+    }
+
+    return savedPlaces.filter((place) => place.label.toLowerCase().includes(query));
+  }, [activeSearchField, originQuery, savedPlaces, searchQuery]);
+
+  const savedPlacesLookup = useMemo(() => {
+    return new Map(savedPlaces.map((place) => [place.id, place]));
+  }, [savedPlaces]);
 
   const normalizeRoutePolyline = (points: RoutePoint[]): Array<[number, number]> => {
     if (!points.length) {
@@ -514,8 +623,21 @@ export function HomeScreen() {
         })
         .filter((item) => Number.isFinite(item.latitude) && Number.isFinite(item.longitude));
 
-      if (mapped.length) {
-        setSearchResults(mapped);
+      const savedMatches = savedPlaces
+        .filter((place) => place.label.toLowerCase().includes(text.toLowerCase()))
+        .map((place) => ({
+          id: `saved-${place.id}`,
+          label: `${place.label} (saved)` ,
+          latitude: place.latitude,
+          longitude: place.longitude
+        }));
+
+      const mergedResults = [...savedMatches, ...mapped].filter(
+        (item, index, array) => array.findIndex((other) => other.label === item.label && other.latitude === item.latitude && other.longitude === item.longitude) === index
+      );
+
+      if (mergedResults.length) {
+        setSearchResults(mergedResults);
         setSearchError(undefined);
         return;
       }
@@ -528,7 +650,7 @@ export function HomeScreen() {
         longitude: item.longitude
       }));
 
-      setSearchResults(fallbackResults);
+      setSearchResults([...savedMatches, ...fallbackResults]);
       if (!fallbackResults.length) {
         setSearchError("No matching location found.");
       }
@@ -546,7 +668,17 @@ export function HomeScreen() {
           longitude: item.longitude
         }));
 
-        setSearchResults(fallbackResults);
+        setSearchResults([
+          ...savedPlaces
+            .filter((place) => place.label.toLowerCase().includes(text.toLowerCase()))
+            .map((place) => ({
+              id: `saved-${place.id}`,
+              label: `${place.label} (saved)`,
+              latitude: place.latitude,
+              longitude: place.longitude
+            })),
+          ...fallbackResults
+        ]);
         setSearchError(fallbackResults.length ? undefined : "Unable to search location.");
       } catch {
         setSearchResults([]);
@@ -603,6 +735,65 @@ export function HomeScreen() {
     if (selectedDestination) {
       void fetchRoadRoute(origin, selectedDestination);
     }
+  };
+
+  const openSaveFavoriteModal = (destination?: { latitude: number; longitude: number }) => {
+    const source = destination ?? selectedDestination;
+    if (!source) {
+      Alert.alert("No destination selected", "Long-press the map to choose a point first.");
+      return;
+    }
+
+    pendingFavoriteDestinationRef.current = source;
+    setFavoriteLabelInput("");
+    setIsFavoriteModalOpen(true);
+  };
+
+  const saveFavoritePlace = () => {
+    const source = pendingFavoriteDestinationRef.current;
+    if (!source) {
+      Alert.alert("No destination selected", "Long-press the map to choose a point first.");
+      return;
+    }
+
+    const label = favoriteLabelInput.trim();
+    if (!label) {
+      Alert.alert("Label required", "Enter a name like Home, Office, Work, Gym, or any custom place.");
+      return;
+    }
+
+    const savedPlace = upsertSavedPlace({
+      label,
+      latitude: source.latitude,
+      longitude: source.longitude
+    });
+
+    pendingFavoriteDestinationRef.current = undefined;
+    setIsFavoriteModalOpen(false);
+    setFavoriteLabelInput("");
+    Alert.alert("Saved", `${savedPlace.label} was added to your profile and will show up in search.`);
+  };
+
+  const useFavoritePlace = (placeId: string) => {
+    const place = savedPlacesLookup.get(placeId);
+    if (!place) {
+      return;
+    }
+
+    if (activeSearchField === "from") {
+      applyOrigin({ latitude: place.latitude, longitude: place.longitude }, place.label);
+      setOriginQuery(place.label);
+    } else {
+      setSearchQuery(place.label);
+      addRecentSearch({
+        label: place.label,
+        latitude: place.latitude,
+        longitude: place.longitude
+      });
+      applyDestination({ latitude: place.latitude, longitude: place.longitude });
+    }
+
+    setIsSearchModalOpen(false);
   };
 
   const addRecentSearch = (entry: { label: string; latitude: number; longitude: number }) => {
@@ -834,6 +1025,26 @@ export function HomeScreen() {
   }, [currentPosition, effectiveRouteOrigin, isRideModeActive, selectedDestination]);
 
   useEffect(() => {
+    if (!isRideModeActive || !currentPosition || !routePath.length || !selectedDestination || !effectiveRouteOrigin) {
+      return;
+    }
+
+    const offRouteDistance = distanceToRouteMeters(currentPosition, routePath);
+    if (offRouteDistance < 60) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastOffRouteRef.current < 7000) {
+      return;
+    }
+
+    lastOffRouteRef.current = now;
+    setGpsStatus(`Off route by ${Math.round(offRouteDistance)}m. Re-routing...`);
+    void fetchRoadRoute(effectiveRouteOrigin, selectedDestination);
+  }, [currentPosition, effectiveRouteOrigin, isRideModeActive, routePath, selectedDestination]);
+
+  useEffect(() => {
     if (!isRideModeActive || !currentPosition) {
       return;
     }
@@ -886,12 +1097,27 @@ export function HomeScreen() {
     }
   };
 
-  const selectDestination = (event: LongPressEvent) => {
+  const selectDestination = (event: LongPressEvent | MapPressEvent) => {
     const coordinate = event.nativeEvent.coordinate;
-    applyDestination({
+    const nextDestination = {
       latitude: coordinate.latitude,
       longitude: coordinate.longitude
-    });
+    };
+
+    applyDestination(nextDestination);
+    Alert.alert(
+      "Destination Selected",
+      "Do you want to save this location to your profile?",
+      [
+        { text: "Not now", style: "cancel" },
+        {
+          text: "Save place",
+          onPress: () => {
+            openSaveFavoriteModal(nextDestination);
+          }
+        }
+      ]
+    );
   };
 
   const recenterToCurrentLocation = async () => {
@@ -949,7 +1175,7 @@ export function HomeScreen() {
 
   const sendDestination = async () => {
     if (!selectedDestination) {
-      setSendMessage("Long-press map to choose a destination pin.");
+      setSendMessage("Tap map to choose a destination pin.");
       return;
     }
 
@@ -1072,6 +1298,7 @@ export function HomeScreen() {
           style={{ flex: 1 }}
           customMapStyle={isDark ? DARK_MAP_STYLE : []}
           initialRegion={mapRegion}
+          onPress={selectDestination}
           onLongPress={selectDestination}
           showsUserLocation
           showsMyLocationButton
@@ -1091,7 +1318,7 @@ export function HomeScreen() {
             <View pointerEvents="none" className="mt-2 rounded-2xl bg-[#fc4c02]/95 px-4 py-3">
               <Text className="text-[11px] font-extrabold uppercase tracking-[1.8px] text-[#ffedd5]">Navigation Hub</Text>
               <Text className="mt-1 text-xl font-black text-white">Send Route To Handlebar Device</Text>
-              <Text className="mt-1 text-xs text-[#fff7ed]">Long-press map to pin destination, then tap Send To Device.</Text>
+              <Text className="mt-1 text-xs text-[#fff7ed]">Tap map to pin destination, then tap Send To Device.</Text>
             </View>
           ) : null}
         </View>
@@ -1134,11 +1361,11 @@ export function HomeScreen() {
         >
           <View className="flex-row items-center justify-between">
             <View>
-              <Text className="text-[11px] font-bold uppercase tracking-[1.8px] text-[#6b7280]">Device</Text>
-              <Text className="mt-1 text-lg font-extrabold text-[#111827]">
+              <Text className={`text-[11px] font-bold uppercase tracking-[1.8px] ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Device</Text>
+              <Text className={`mt-1 text-lg font-extrabold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>
                 {isConnected ? connectedDeviceName ?? "NavDot Device" : "No Device Connected"}
               </Text>
-              <Text className="mt-1 text-xs text-[#6b7280]">
+              <Text className={`mt-1 text-xs ${isDark ? "text-[#d1d5db]" : "text-[#6b7280]"}`}>
                 {preferredDeviceName ? `Preferred: ${preferredDeviceName}` : "Pick one device to save as preferred."}
               </Text>
             </View>
@@ -1249,9 +1476,38 @@ export function HomeScreen() {
               </View>
             </View>
 
+            {routeOptions.length ? (
+              <View className="mt-2">
+                <Text className={`text-[10px] uppercase tracking-wide ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Route Preference</Text>
+                <View className="mt-1 flex-row gap-2">
+                  {(["recommended", "fastest", "shortest"] as RoutePreference[]).map((option) => {
+                    const selected = routePreference === option;
+                    return (
+                      <Pressable
+                        key={option}
+                        className={`rounded-full border px-3 py-1.5 ${selected ? "border-[#fc4c02] bg-[#fc4c02]" : isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#d1d5db] bg-white"}`}
+                        onPress={() => setRoutePreference(option)}
+                      >
+                        <Text className={`text-[11px] font-bold capitalize ${selected ? "text-white" : isDark ? "text-[#d1d5db]" : "text-[#374151]"}`}>{option}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+
+            {routeOptions[activeRouteIndex] ? (
+              <View className={`mt-3 rounded-xl border px-3 py-2.5 ${isDark ? "border-[#374151] bg-[#0f172a]" : "border-[#e5e7eb] bg-[#f8fafc]"}`}>
+                <Text className={`text-[10px] uppercase tracking-wide ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Next Turn</Text>
+                <Text className={`mt-1 text-sm font-black ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>
+                  {routeOptions[activeRouteIndex].direction} in {Math.max(1, Math.round(routeOptions[activeRouteIndex].nextTurnDistanceMeters))} m
+                </Text>
+              </View>
+            ) : null}
+
             {routeOptions.length > 1 ? (
               <View className="mt-2">
-                <Text className="text-[10px] uppercase tracking-wide text-[#6b7280]">Choose Route</Text>
+                <Text className={`text-[10px] uppercase tracking-wide ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Choose Route</Text>
                 <View className="mt-1 flex-row flex-wrap gap-2">
                   {routeOptions.map((route, index) => {
                     const selected = index === activeRouteIndex;
@@ -1259,14 +1515,14 @@ export function HomeScreen() {
                     return (
                       <Pressable
                         key={route.id}
-                        className={`rounded-lg border px-2.5 py-1.5 ${selected ? "border-[#111827] bg-[#111827]" : "border-[#d1d5db] bg-white"}`}
+                        className={`rounded-lg border px-2.5 py-1.5 ${selected ? "border-[#111827] bg-[#111827]" : isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#d1d5db] bg-white"}`}
                         onPress={() => {
                           setActiveRouteIndex(index);
                           setGpsStatus(`Route ${index + 1} selected.`);
                           focusOnRoute(route.path);
                         }}
                       >
-                        <Text className={`text-[11px] font-bold ${selected ? "text-white" : "text-[#111827]"}`}>
+                        <Text className={`text-[11px] font-bold ${selected ? "text-white" : isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>
                           Route {index + 1}
                         </Text>
                         {tags.length ? (
@@ -1274,7 +1530,7 @@ export function HomeScreen() {
                             {tags.join(" • ")}
                           </Text>
                         ) : null}
-                        <Text className={`text-[10px] ${selected ? "text-[#e5e7eb]" : "text-[#6b7280]"}`}>
+                        <Text className={`text-[10px] ${selected ? "text-[#e5e7eb]" : isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>
                           {(route.distanceMeters / 1000).toFixed(1)} km • {Math.max(1, Math.round(route.etaSeconds / 60))} min
                         </Text>
                       </Pressable>
@@ -1310,11 +1566,11 @@ export function HomeScreen() {
 
           <View className="mt-3 gap-2">
             {devices.map((device) => (
-              <View key={device.id} className="rounded-xl border border-[#e5e7eb] px-3 py-2.5">
+              <View key={device.id} className={`rounded-xl border px-3 py-2.5 ${isDark ? "border-[#374151] bg-[#0f172a]" : "border-[#e5e7eb] bg-white"}`}>
                 <View className="flex-row items-center justify-between">
                   <View>
-                    <Text className="text-sm font-bold text-[#111827]">{device.name}</Text>
-                    <Text className="text-[11px] text-[#6b7280]">Signal RSSI {device.rssi}</Text>
+                    <Text className={`text-sm font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>{device.name}</Text>
+                    <Text className={`text-[11px] ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Signal RSSI {device.rssi}</Text>
                   </View>
                   <Pressable
                     className="rounded-lg border border-[#fc4c02] bg-[#fff5f1] px-3 py-1.5"
@@ -1332,8 +1588,8 @@ export function HomeScreen() {
             ))}
 
             {!devices.length && !isScanning ? (
-              <View className="rounded-xl border border-dashed border-[#d1d5db] px-3 py-3">
-                <Text className="text-xs text-[#6b7280]">No nearby devices yet. Tap Scan Devices.</Text>
+              <View className={`rounded-xl border border-dashed px-3 py-3 ${isDark ? "border-[#374151] bg-[#0f172a]" : "border-[#d1d5db] bg-white"}`}>
+                <Text className={`text-xs ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>No nearby devices yet. Tap Scan Devices.</Text>
               </View>
             ) : null}
           </View>
@@ -1403,6 +1659,23 @@ export function HomeScreen() {
                   {selectedOrigin?.label ?? "Current location"}
                 </Text>
               </View>
+
+              {matchingSavedPlaces.length ? (
+                <View className="mt-1">
+                  <Text className={`text-[10px] uppercase tracking-wide ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Saved Places</Text>
+                  <View className="mt-1 flex-row flex-wrap gap-2">
+                    {matchingSavedPlaces.slice(0, 8).map((place) => (
+                      <Pressable
+                        key={place.id}
+                        className={`rounded-full border px-3 py-2 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#d1d5db] bg-[#f9fafb]"}`}
+                        onPress={() => useFavoritePlace(place.id)}
+                      >
+                        <Text className={`text-xs font-semibold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>{place.label}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
 
               <View className="flex-row items-center gap-2">
                 <View className={`h-12 flex-1 flex-row items-center rounded-2xl border px-3 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#d1d5db] bg-[#f9fafb]"}`}>
@@ -1515,6 +1788,39 @@ export function HomeScreen() {
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={isFavoriteModalOpen} transparent animationType="fade" onRequestClose={() => setIsFavoriteModalOpen(false)}>
+        <View className="flex-1 items-center justify-center bg-black/45 px-5">
+          <View className={`w-full rounded-2xl border px-4 py-4 ${isDark ? "border-[#374151] bg-[#111827]" : "border-[#e5e7eb] bg-white"}`}>
+            <Text className={`text-sm font-black ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>Save Destination</Text>
+            <Text className={`mt-1 text-xs ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Name this place (Home, Work, Office, Gym, etc.)</Text>
+
+            <TextInput
+              className={`mt-3 rounded-xl border px-3 py-3 ${isDark ? "border-[#374151] bg-[#1f2937] text-[#f3f4f6]" : "border-[#d1d5db] bg-[#f9fafb] text-[#111827]"}`}
+              value={favoriteLabelInput}
+              onChangeText={setFavoriteLabelInput}
+              placeholder="Enter place name"
+              placeholderTextColor={isDark ? "#6b7280" : "#9ca3af"}
+              autoCapitalize="words"
+            />
+
+            <View className="mt-3 flex-row gap-2">
+              <Pressable
+                className={`flex-1 rounded-xl border py-2.5 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#d1d5db] bg-[#f9fafb]"}`}
+                onPress={() => {
+                  setIsFavoriteModalOpen(false);
+                  setFavoriteLabelInput("");
+                }}
+              >
+                <Text className={`text-center text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>Cancel</Text>
+              </Pressable>
+              <Pressable className="flex-1 rounded-xl bg-[#fc4c02] py-2.5" onPress={saveFavoritePlace}>
+                <Text className="text-center text-xs font-bold text-white">Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
       </Modal>
     </KeyboardAvoidingView>
   );

@@ -27,6 +27,9 @@ class BleService {
   private scanStopTimer?: ReturnType<typeof setTimeout>;
   private requestedMtu?: number;
   private negotiatedMtu?: number;
+  private writeSequence = 0;
+  private writeChain: Promise<void> = Promise.resolve();
+  private lastCriticalFingerprint?: { key: string; at: number };
   private cachedWriteCharacteristic?: {
     serviceUUID: string;
     characteristicUUID: string;
@@ -253,6 +256,8 @@ class BleService {
 
     const payload = JSON.stringify({
       ts: Date.now(),
+      seq: ++this.writeSequence,
+      kind: "telemetry",
       heading: Number(packet.heading.toFixed(2)),
       latitude: packet.latitude,
       longitude: packet.longitude,
@@ -268,7 +273,7 @@ class BleService {
     });
 
     const base64Payload = Buffer.from(payload, "utf-8").toString("base64");
-    await this.writeToNavDot(base64Payload);
+    await this.enqueueWrite(() => this.writeToNavDot(base64Payload));
   }
 
   async writeDestinationPacket(packet: {
@@ -280,8 +285,14 @@ class BleService {
       throw new Error("No connected BLE device.");
     }
 
+    const criticalFingerprint = `destination|${packet.latitude.toFixed(6)}|${packet.longitude.toFixed(6)}|${packet.label ?? "map_pin"}`;
+    if (this.shouldSuppressCriticalPacket(criticalFingerprint)) {
+      return;
+    }
+
     const payload = JSON.stringify({
       ts: Date.now(),
+      seq: ++this.writeSequence,
       type: "destination",
       latitude: Number(packet.latitude.toFixed(6)),
       longitude: Number(packet.longitude.toFixed(6)),
@@ -289,7 +300,8 @@ class BleService {
     });
 
     const base64Payload = Buffer.from(payload, "utf-8").toString("base64");
-    await this.writeToNavDot(base64Payload);
+    await this.enqueueCriticalWrite(() => this.writeToNavDot(base64Payload));
+    this.lastCriticalFingerprint = { key: criticalFingerprint, at: Date.now() };
   }
 
   async writeNavigationDataPacket(packet: {
@@ -302,8 +314,14 @@ class BleService {
       throw new Error("No connected BLE device.");
     }
 
+    const criticalFingerprint = `navigation|${packet.direction}|${Math.round(packet.distance)}|${Math.round(packet.speed)}|${JSON.stringify(packet.polyline)}`;
+    if (this.shouldSuppressCriticalPacket(criticalFingerprint)) {
+      return;
+    }
+
     const payload = JSON.stringify({
       ts: Date.now(),
+      seq: ++this.writeSequence,
       type: "navigation",
       direction: packet.direction,
       distance: Math.max(0, Math.round(packet.distance)),
@@ -312,7 +330,43 @@ class BleService {
     });
 
     const base64Payload = Buffer.from(payload, "utf-8").toString("base64");
-    await this.writeToNavDot(base64Payload);
+    await this.enqueueCriticalWrite(() => this.writeToNavDot(base64Payload));
+    this.lastCriticalFingerprint = { key: criticalFingerprint, at: Date.now() };
+  }
+
+  private shouldSuppressCriticalPacket(nextFingerprint: string): boolean {
+    if (!this.lastCriticalFingerprint) {
+      return false;
+    }
+
+    const isDuplicate = this.lastCriticalFingerprint.key === nextFingerprint;
+    const isWithinWindow = Date.now() - this.lastCriticalFingerprint.at < 1200;
+    return isDuplicate && isWithinWindow;
+  }
+
+  private async enqueueWrite(operation: () => Promise<void>): Promise<void> {
+    const scheduled = this.writeChain.then(operation);
+    this.writeChain = scheduled.catch(() => undefined);
+    return scheduled;
+  }
+
+  private async enqueueCriticalWrite(operation: () => Promise<void>): Promise<void> {
+    return this.enqueueWrite(async () => {
+      let attempt = 0;
+      let lastError: unknown;
+
+      while (attempt < 3) {
+        attempt += 1;
+        try {
+          await operation();
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      throw lastError instanceof Error ? lastError : new Error("Critical BLE write failed after retries.");
+    });
   }
 
   private async cacheWriteCharacteristic(device: import("react-native-ble-plx").Device): Promise<void> {

@@ -68,6 +68,23 @@ async function sendHeadingPacket(): Promise<void> {
 
   const currentDirection = nav.currentDirection;
   const routeSpeed = nav.speed ?? (nav.speedMps ?? 0) * 3.6;
+  const destination = nav.destination
+    ? {
+        latitude: nav.destination.latitude,
+        longitude: nav.destination.longitude,
+        label: nav.destination.label
+      }
+    : undefined;
+
+  if (nav.destination?.updatedAt && nav.destination.updatedAt !== lastDestinationSentAt) {
+    await bleService.writeDestinationPacket({
+      latitude: nav.destination.latitude,
+      longitude: nav.destination.longitude,
+      label: nav.destination.label ?? "selected_pin"
+    });
+    lastDestinationSentAt = nav.destination.updatedAt;
+  }
+
   const canSendRoutePacket =
     nav.isRouteDirty &&
     currentDirection &&
@@ -91,23 +108,6 @@ async function sendHeadingPacket(): Promise<void> {
         error instanceof Error ? error.message : "Unable to send navigation route packet"
       );
     }
-  }
-
-  const destination = nav.destination
-    ? {
-        latitude: nav.destination.latitude,
-        longitude: nav.destination.longitude,
-        label: nav.destination.label
-      }
-    : undefined;
-
-  if (nav.destination?.updatedAt && nav.destination.updatedAt !== lastDestinationSentAt) {
-    await bleService.writeDestinationPacket({
-      latitude: nav.destination.latitude,
-      longitude: nav.destination.longitude,
-      label: nav.destination.label ?? "selected_pin"
-    });
-    lastDestinationSentAt = nav.destination.updatedAt;
   }
 
   await bleService.writeHeadingPacket({

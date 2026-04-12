@@ -4,6 +4,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useNavStore } from "../store/useNavStore";
 import { useAuthStore } from "../store/useAuthStore";
+import { usePlacesStore } from "../store/usePlacesStore";
 import { signOutUser, updateEmail, updatePassword, updateProfile } from "../services/authService";
 
 function clampZoom(value: number): number {
@@ -25,6 +26,8 @@ export default function ProfileScreen() {
   const user = useAuthStore((state) => state.user);
   const setSession = useAuthStore((state) => state.setSession);
   const clearSession = useAuthStore((state) => state.clearSession);
+  const savedPlaces = usePlacesStore((state) => state.savedPlaces);
+  const removeSavedPlace = usePlacesStore((state) => state.removeSavedPlace);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isPasswordOpen, setIsPasswordOpen] = useState(false);
   const [fullNameInput, setFullNameInput] = useState(user?.fullName ?? "");
@@ -493,6 +496,52 @@ export default function ProfileScreen() {
         <Pressable className="mt-3 rounded-xl bg-[#111827] px-3 py-3" onPress={() => void signOut()}>
           <Text className="text-center font-bold text-white">Sign Out</Text>
         </Pressable>
+      </View>
+
+      <View className={`mt-4 rounded-3xl border p-5 ${isDark ? "border-[#1f2937] bg-[#111827]" : "border-[#e5e7eb] bg-white"}`}>
+        <Text className={`text-sm font-bold ${isDark ? "text-[#f9fafb]" : "text-[#111827]"}`}>Saved Destinations</Text>
+        <Text className={`mt-1 text-xs ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>
+          Long-press any point on Home map, then save it with any label (Home, Office, Work, etc.).
+        </Text>
+
+        {savedPlaces.length ? (
+          <View className="mt-3 gap-2">
+            {savedPlaces.map((place) => (
+              <View
+                key={place.id}
+                className={`rounded-xl border px-3 py-2.5 ${isDark ? "border-[#374151] bg-[#0f172a]" : "border-[#d1d5db] bg-[#f9fafb]"}`}
+              >
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-1">
+                    <Text className={`text-sm font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>{place.label}</Text>
+                    <Text className={`mt-0.5 text-[11px] ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>
+                      {place.latitude.toFixed(5)}, {place.longitude.toFixed(5)}
+                    </Text>
+                  </View>
+                  <Pressable
+                    className="rounded-lg border border-[#ef4444] px-3 py-1.5"
+                    onPress={() => {
+                      Alert.alert("Remove saved place", `Delete ${place.label}?`, [
+                        { text: "Cancel", style: "cancel" },
+                        {
+                          text: "Delete",
+                          style: "destructive",
+                          onPress: () => removeSavedPlace(place.id)
+                        }
+                      ]);
+                    }}
+                  >
+                    <Text className="text-xs font-bold text-[#ef4444]">Delete</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <View className={`mt-3 rounded-xl border border-dashed px-3 py-3 ${isDark ? "border-[#374151] bg-[#0f172a]" : "border-[#d1d5db] bg-[#f9fafb]"}`}>
+            <Text className={`text-xs ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>No saved destinations yet.</Text>
+          </View>
+        )}
       </View>
 
       <View className={`mt-4 rounded-3xl border p-5 ${isDark ? "border-[#1f2937] bg-[#111827]" : "border-[#e5e7eb] bg-white"}`}>

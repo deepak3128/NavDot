@@ -182,6 +182,37 @@ function mapSessionFromUser(user: SupabaseUserResponse, session: SupabaseStoredS
   };
 }
 
+function normalizeAuthError(error: unknown, provider?: OAuthProvider): Error {
+  const message = error instanceof Error ? error.message : "Authentication failed.";
+  const lower = message.toLowerCase();
+
+  if (lower.includes("unsupported provider") || lower.includes("unsuported provider")) {
+    if (provider === "apple") {
+      return new Error(
+        "Apple sign-in is not enabled in Supabase. Enable Apple provider and configure Service ID, Team ID, Key ID, and private key in Supabase Auth settings."
+      );
+    }
+
+    return new Error(
+      "Google sign-in is not enabled in Supabase. Enable Google provider and configure Client ID/Client Secret in Supabase Auth settings."
+    );
+  }
+
+  if (lower.includes("invalid login credentials")) {
+    return new Error("Invalid email or password.");
+  }
+
+  if (lower.includes("email not confirmed")) {
+    return new Error("Please verify your email address before signing in.");
+  }
+
+  if (lower.includes("already registered") || lower.includes("user already registered")) {
+    return new Error("This email is already registered. Try logging in instead.");
+  }
+
+  return new Error(message);
+}
+
 function getSessionDisplayName(metadata: unknown): string | undefined {
   if (!metadata || typeof metadata !== "object") {
     return undefined;
@@ -264,57 +295,54 @@ export function mapSupabaseSession(session: SupabaseStoredSession): AuthSession 
 }
 
 export async function loginWithOAuth(provider: OAuthProvider): Promise<AuthSession> {
-  const redirectTo = "navdot://auth-callback";
-  const authUrl = `${supabaseConfig.authBaseUrl}/authorize?provider=${provider}&redirect_to=${encodeURIComponent(redirectTo)}&response_type=token`;
+  try {
+    const redirectTo = "navdot://auth-callback";
+    const authUrl = `${supabaseConfig.authBaseUrl}/authorize?provider=${provider}&redirect_to=${encodeURIComponent(redirectTo)}&response_type=token`;
 
-  const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectTo);
+    const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectTo);
 
-  if (result.type !== "success" || !result.url) {
-    if (result.type === "cancel" || result.type === "dismiss") {
-      throw new Error("Authentication was canceled.");
-    }
-    throw new Error("Unable to complete OAuth authentication.");
-  }
-
-  const callback = parseOAuthCallback(result.url);
-  if (callback.error) {
-    const combined = `${callback.error} ${callback.errorDescription ?? ""}`.toLowerCase();
-    if (combined.includes("unsupported provider") || combined.includes("unsuported provider")) {
-      throw new Error(
-        "Google sign-in is not enabled in Supabase or provider config is invalid. In Supabase Dashboard, open Authentication > Providers > Google, enable it, set Client ID/Secret, and add redirect URI: https://<your-project-ref>.supabase.co/auth/v1/callback"
-      );
+    if (result.type !== "success" || !result.url) {
+      if (result.type === "cancel" || result.type === "dismiss") {
+        throw new Error("Authentication was canceled.");
+      }
+      throw new Error("Unable to complete OAuth authentication.");
     }
 
-    throw new Error(callback.errorDescription || callback.error);
-  }
-
-  if (!callback.accessToken) {
-    throw new Error("OAuth completed, but no access token was returned.");
-  }
-
-  const user = await requestSupabaseAuth<SupabaseUserResponse>(
-    "/user",
-    {
-      method: "GET"
-    },
-    callback.accessToken
-  );
-
-  const session: SupabaseStoredSession = {
-    access_token: callback.accessToken,
-    refresh_token: callback.refreshToken,
-    expires_at: callback.expiresAt,
-    user: {
-      id: user.id,
-      email: user.email,
-      created_at: user.created_at,
-      full_name: getSessionDisplayName(user.user_metadata),
-      avatar_url: getSessionAvatarUrl(user.user_metadata)
+    const callback = parseOAuthCallback(result.url);
+    if (callback.error) {
+      throw new Error(callback.errorDescription || callback.error);
     }
-  };
 
-  await saveStoredSession(session);
-  return mapSessionFromUser(user, session);
+    if (!callback.accessToken) {
+      throw new Error("OAuth completed, but no access token was returned.");
+    }
+
+    const user = await requestSupabaseAuth<SupabaseUserResponse>(
+      "/user",
+      {
+        method: "GET"
+      },
+      callback.accessToken
+    );
+
+    const session: SupabaseStoredSession = {
+      access_token: callback.accessToken,
+      refresh_token: callback.refreshToken,
+      expires_at: callback.expiresAt,
+      user: {
+        id: user.id,
+        email: user.email,
+        created_at: user.created_at,
+        full_name: getSessionDisplayName(user.user_metadata),
+        avatar_url: getSessionAvatarUrl(user.user_metadata)
+      }
+    };
+
+    await saveStoredSession(session);
+    return mapSessionFromUser(user, session);
+  } catch (error) {
+    throw normalizeAuthError(error, provider);
+  }
 }
 
 export async function registerUser(payload: {
@@ -322,16 +350,21 @@ export async function registerUser(payload: {
   password: string;
   fullName?: string;
 }): Promise<RegisterResponse> {
-  const data = await requestSupabaseAuth<SupabaseSignUpResponse>("/signup", {
-    method: "POST",
-    body: JSON.stringify({
-      email: payload.email,
-      password: payload.password,
-      data: {
-        full_name: payload.fullName
-      }
-    })
-  });
+  let data: SupabaseSignUpResponse;
+  try {
+    data = await requestSupabaseAuth<SupabaseSignUpResponse>("/signup", {
+      method: "POST",
+      body: JSON.stringify({
+        email: payload.email,
+        password: payload.password,
+        data: {
+          full_name: payload.fullName
+        }
+      })
+    });
+  } catch (error) {
+    throw normalizeAuthError(error);
+  }
 
   if (!data.user) {
     throw new Error("Sign-up failed. No user returned.");
@@ -356,13 +389,18 @@ export async function loginUser(payload: {
   email: string;
   password: string;
 }): Promise<LoginResponse> {
-  const data = await requestSupabaseAuth<SupabaseTokenResponse>("/token?grant_type=password", {
-    method: "POST",
-    body: JSON.stringify({
-      email: payload.email,
-      password: payload.password
-    })
-  });
+  let data: SupabaseTokenResponse;
+  try {
+    data = await requestSupabaseAuth<SupabaseTokenResponse>("/token?grant_type=password", {
+      method: "POST",
+      body: JSON.stringify({
+        email: payload.email,
+        password: payload.password
+      })
+    });
+  } catch (error) {
+    throw normalizeAuthError(error);
+  }
 
   if (!data.access_token) {
     throw new Error("Login failed. No active session returned.");
