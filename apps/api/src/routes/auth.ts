@@ -1,10 +1,8 @@
 import { Router } from "express";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { requireAuth } from "../middleware/auth";
 import type { AuthenticatedRequest } from "../types";
-import { createUser, findUserByEmail, findUserProfileById } from "../authStore";
+import { supabase } from "../supabase";
 
 const router = Router();
 
@@ -26,24 +24,36 @@ router.post("/register", async (req, res) => {
   }
 
   const { email, password, fullName } = result.data;
-
-  const existingUser = await findUserByEmail(email);
-  if (existingUser) {
-    return res.status(409).json({ error: "Email already registered" });
-  }
-
-  const passwordHash = await bcrypt.hash(password, 12);
-  let user;
   try {
-    user = await createUser(email, passwordHash, fullName);
-  } catch (error) {
-    if (error instanceof Error && error.message === "EMAIL_EXISTS") {
-      return res.status(409).json({ error: "Email already registered" });
-    }
-    throw error;
-  }
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName
+        }
+      }
+    });
 
-  return res.status(201).json({ user });
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    if (!data.user) {
+      return res.status(500).json({ error: "Registration failed" });
+    }
+
+    return res.status(201).json({
+      user: {
+        id: data.user.id,
+        email: data.user.email ?? email,
+        fullName: (data.user.user_metadata as { full_name?: string } | undefined)?.full_name ?? null,
+        createdAt: data.user.created_at ?? new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Registration failed" });
+  }
 });
 
 router.post("/login", async (req, res) => {
@@ -53,42 +63,42 @@ router.post("/login", async (req, res) => {
   }
 
   const { email, password } = result.data;
-  const user = await findUserByEmail(email);
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password
+  });
 
-  if (!user) {
+  if (error) {
+    return res.status(401).json({ error: error.message });
+  }
+
+  if (!data.session || !data.user) {
     return res.status(401).json({ error: "Invalid credentials" });
   }
-
-  const isValid = await bcrypt.compare(password, user.passwordHash);
-  if (!isValid) {
-    return res.status(401).json({ error: "Invalid credentials" });
-  }
-
-  const secret = process.env.JWT_SECRET || (process.env.NODE_ENV === "production" ? undefined : "navdot-dev-secret");
-  if (!secret) {
-    return res.status(500).json({ error: "JWT secret not configured" });
-  }
-
-  const token = jwt.sign({ sub: user.id, email: user.email }, secret, { expiresIn: "7d" });
 
   return res.json({
-    token,
-    user: { id: user.id, email: user.email, fullName: user.fullName }
+    token: data.session.access_token,
+    user: {
+      id: data.user.id,
+      email: data.user.email ?? email,
+      fullName: (data.user.user_metadata as { full_name?: string } | undefined)?.full_name ?? null
+    }
   });
 });
 
 router.get("/profile", requireAuth, async (req: AuthenticatedRequest, res) => {
-  if (!req.userId) {
+  if (!req.auth) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  const user = await findUserProfileById(req.userId);
-
-  if (!user) {
-    return res.status(404).json({ error: "User not found" });
-  }
-
-  return res.json({ user });
+  return res.json({
+    user: {
+      id: req.auth.userId,
+      email: req.auth.email,
+      fullName: req.auth.fullName ?? null,
+      createdAt: req.auth.createdAt ?? new Date().toISOString()
+    }
+  });
 });
 
 export default router;

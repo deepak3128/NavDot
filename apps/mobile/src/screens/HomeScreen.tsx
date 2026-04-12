@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View
+} from "react-native";
 import * as Location from "expo-location";
 import MapView, { LongPressEvent, Marker, Polyline, Region } from "react-native-maps";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
@@ -36,12 +47,21 @@ type SearchResult = {
   longitude: number;
 };
 
+type RecentSearch = {
+  id: string;
+  label: string;
+  latitude: number;
+  longitude: number;
+};
+
 type RouteOption = {
   id: string;
   path: Array<{ latitude: number; longitude: number }>;
   distanceMeters: number;
   etaSeconds: number;
   headingDeg: number;
+  direction: string;
+  nextTurnDistanceMeters: number;
 };
 
 export function HomeScreen() {
@@ -65,6 +85,8 @@ export function HomeScreen() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | undefined>();
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
+  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
   const [gpsStatus, setGpsStatus] = useState("Auto-fetching current location...");
   const { devices, isScanning, isConnected, connectedDeviceId, connectedDeviceName, preferredDeviceName, error } =
     useBleStore();
@@ -74,9 +96,11 @@ export function HomeScreen() {
   const rideCommandToken = useNavStore((state) => state.rideCommandToken);
   const navigation = useNavigation();
   const mapRef = useRef<MapView | null>(null);
+  const bottomScrollRef = useRef<ScrollView | null>(null);
   const routeAbortRef = useRef<AbortController | null>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
   const searchInputRef = useRef<TextInput | null>(null);
+  const modalSearchInputRef = useRef<TextInput | null>(null);
   const hasCenteredToCurrentRef = useRef(false);
   const selectedDestinationRef = useRef<{ latitude: number; longitude: number } | undefined>(undefined);
   const lastRouteRefreshAtRef = useRef(0);
@@ -194,6 +218,28 @@ export function HomeScreen() {
     });
   }, [routeOptions]);
 
+  const normalizeRoutePolyline = (points: Array<{ latitude: number; longitude: number }>): Array<[number, number]> => {
+    if (!points.length) {
+      return [];
+    }
+
+    const minLat = Math.min(...points.map((point) => point.latitude));
+    const maxLat = Math.max(...points.map((point) => point.latitude));
+    const minLng = Math.min(...points.map((point) => point.longitude));
+    const maxLng = Math.max(...points.map((point) => point.longitude));
+
+    const latSpan = Math.max(maxLat - minLat, 1e-9);
+    const lngSpan = Math.max(maxLng - minLng, 1e-9);
+
+    return points.slice(0, 120).map((point) => {
+      const x = (point.longitude - minLng) / lngSpan;
+      const y = (point.latitude - minLat) / latSpan;
+      return [Number(x.toFixed(4)), Number(y.toFixed(4))];
+    });
+  };
+
+  const bleDebug = useMemo(() => bleService.getDebugState(), [connectedDeviceId, isConnected, isScanning, devices.length, error]);
+
   const fetchRoadRoute = async (
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number }
@@ -211,6 +257,15 @@ export function HomeScreen() {
           distance: number;
           duration: number;
           geometry?: { coordinates?: Array<[number, number]> };
+          legs?: Array<{
+            steps?: Array<{
+              distance?: number;
+              maneuver?: {
+                type?: string;
+                modifier?: string;
+              };
+            }>;
+          }>;
         },
         index: number
       ): RouteOption | undefined => {
@@ -232,12 +287,27 @@ export function HomeScreen() {
         const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
         const headingDeg = Math.round(((Math.atan2(y, x) * 180) / Math.PI + 360) % 360);
 
+        const firstStep = route.legs?.[0]?.steps?.[0];
+        const maneuverType = (firstStep?.maneuver?.type ?? "").toLowerCase();
+        const maneuverModifier = (firstStep?.maneuver?.modifier ?? "").toLowerCase();
+
+        let direction = "STRAIGHT";
+        if (maneuverType.includes("uturn") || maneuverModifier.includes("uturn")) {
+          direction = "UTURN";
+        } else if (maneuverModifier.includes("left")) {
+          direction = "LEFT";
+        } else if (maneuverModifier.includes("right")) {
+          direction = "RIGHT";
+        }
+
         return {
           id: `route-${index + 1}`,
           path: points,
           distanceMeters: route.distance,
           etaSeconds: Math.round(route.duration),
-          headingDeg
+          headingDeg,
+          direction,
+          nextTurnDistanceMeters: Math.round(firstStep?.distance ?? 0)
         };
       };
 
@@ -252,6 +322,15 @@ export function HomeScreen() {
             distance: number;
             duration: number;
             geometry?: { coordinates?: Array<[number, number]> };
+            legs?: Array<{
+              steps?: Array<{
+                distance?: number;
+                maneuver?: {
+                  type?: string;
+                  modifier?: string;
+                };
+              }>;
+            }>;
           }>;
         };
 
@@ -485,6 +564,29 @@ export function HomeScreen() {
     }
   };
 
+  const addRecentSearch = (entry: { label: string; latitude: number; longitude: number }) => {
+    const normalizedLabel = entry.label.trim();
+    if (!normalizedLabel) {
+      return;
+    }
+
+    const key = `${normalizedLabel.toLowerCase()}-${entry.latitude.toFixed(4)}-${entry.longitude.toFixed(4)}`;
+
+    setRecentSearches((previous) => {
+      const next = [
+        {
+          id: key,
+          label: normalizedLabel,
+          latitude: entry.latitude,
+          longitude: entry.longitude
+        },
+        ...previous.filter((item) => item.id !== key)
+      ];
+
+      return next.slice(0, 6);
+    });
+  };
+
   const deliveryStatus = useMemo(() => {
     if (sendBusy) {
       return {
@@ -713,14 +815,23 @@ export function HomeScreen() {
   }, [currentPosition, isRideModeActive, rideCommandToken, selectedDestination]);
 
   const handleScan = async () => {
-    const granted = await bleService.requestPermissions();
-    if (!granted) {
-      useBleStore.getState().setError("Bluetooth permission denied.");
-      return;
-    }
+    try {
+      const granted = await bleService.requestPermissions();
+      if (!granted) {
+        const message = "Bluetooth permission denied.";
+        useBleStore.getState().setError(message);
+        Alert.alert("Permission required", "Please allow Bluetooth and Location permissions to scan nearby devices.");
+        return;
+      }
 
-    await bleService.waitForPoweredOn();
-    await bleService.startScan();
+      await bleService.waitForPoweredOn();
+      await bleService.startScan();
+      setGpsStatus("Scanning for nearby Bluetooth devices...");
+    } catch (scanError) {
+      const message = scanError instanceof Error ? scanError.message : "Unable to start Bluetooth scan.";
+      useBleStore.getState().setError(message);
+      Alert.alert("Scan failed", message);
+    }
   };
 
   const connect = async (deviceId: string) => {
@@ -808,6 +919,24 @@ export function HomeScreen() {
     setSendMessage(undefined);
 
     try {
+      const activeRoute = routeOptions[activeRouteIndex];
+      const fallbackPath = currentPosition
+        ? [currentPosition, selectedDestination]
+        : [selectedDestination];
+      const pathPoints = activeRoute?.path?.length ? activeRoute.path : fallbackPath;
+      const normalizedPolyline = normalizeRoutePolyline(pathPoints);
+
+      const distanceForPacket = activeRoute?.nextTurnDistanceMeters
+        ? activeRoute.nextTurnDistanceMeters
+        : routeMetrics?.distanceMeters ?? haversineDistanceMeters(pathPoints[0], selectedDestination);
+
+      await bleService.writeNavigationDataPacket({
+        direction: activeRoute?.direction ?? "STRAIGHT",
+        distance: distanceForPacket,
+        speed: currentSpeedMps > 0 ? currentSpeedMps * 3.6 : 0,
+        polyline: normalizedPolyline
+      });
+
       await bleService.writeDestinationPacket({
         latitude: selectedDestination.latitude,
         longitude: selectedDestination.longitude,
@@ -837,7 +966,13 @@ export function HomeScreen() {
     if (first) {
       setSearchQuery(first.label);
       setSearchResults([]);
+      addRecentSearch({
+        label: first.label,
+        latitude: first.latitude,
+        longitude: first.longitude
+      });
       applyDestination({ latitude: first.latitude, longitude: first.longitude });
+      setIsSearchModalOpen(false);
       return;
     }
 
@@ -854,11 +989,24 @@ export function HomeScreen() {
       }
 
       setSearchError(undefined);
+      addRecentSearch({
+        label: query,
+        latitude: firstFallback.latitude,
+        longitude: firstFallback.longitude
+      });
       applyDestination({
         latitude: firstFallback.latitude,
         longitude: firstFallback.longitude
       });
+      setIsSearchModalOpen(false);
     });
+  };
+
+  const openSearchModal = () => {
+    setIsSearchModalOpen(true);
+    setTimeout(() => {
+      modalSearchInputRef.current?.focus();
+    }, 120);
   };
 
   useEffect(() => {
@@ -868,7 +1016,11 @@ export function HomeScreen() {
   }, [navigation]);
 
   return (
-    <View className={`flex-1 ${isDark ? "bg-[#0b1220]" : "bg-[#f3f4f6]"}`}>
+    <KeyboardAvoidingView
+      className={`flex-1 ${isDark ? "bg-[#0b1220]" : "bg-[#f3f4f6]"}`}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 84 : 16}
+    >
       <View className="h-[56%] overflow-hidden">
         <MapView
           ref={(instance) => {
@@ -884,7 +1036,7 @@ export function HomeScreen() {
           {routePath.length > 1 ? (
             <Polyline
               coordinates={routePath}
-              strokeColor="#0f172a"
+              strokeColor={isDark ? "#3b82f6" : "#0f172a"}
               strokeWidth={5}
             />
           ) : null}
@@ -927,10 +1079,15 @@ export function HomeScreen() {
 
       <View className={`-mt-0 flex-1 rounded-t-[28px] border ${isDark ? "border-[#1f2937] bg-[#111827]" : "border-[#e5e7eb] bg-white"}`}>
         <ScrollView
+          ref={(instance) => {
+            bottomScrollRef.current = instance;
+          }}
           className="flex-1 px-5 pt-4"
           contentContainerStyle={{ paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
           nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
         >
           <View className="flex-row items-center justify-between">
             <View>
@@ -973,7 +1130,7 @@ export function HomeScreen() {
           </View>
 
           <View
-            className="mt-3 rounded-[28px] border border-[#e5e7eb] bg-white px-3 py-3"
+            className={`mt-3 rounded-3xl border px-4 py-4 ${isDark ? "border-[#1f2937] bg-[#111827]" : "border-[#e5e7eb] bg-white"}`}
             style={{
               shadowColor: "#111827",
               shadowOpacity: 0.08,
@@ -984,81 +1141,51 @@ export function HomeScreen() {
           >
             <View className="flex-row items-start justify-between">
               <View>
-                <Text className="text-[10px] uppercase tracking-[1.6px] text-[#6b7280]">Search</Text>
-                <Text className="mt-1 text-xs text-[#4b5563]">Quick search, thumb friendly.</Text>
+                <Text className={`text-[10px] uppercase tracking-[1.6px] ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Search</Text>
+                <Text className={`mt-1 text-xs ${isDark ? "text-[#d1d5db]" : "text-[#4b5563]"}`}>Quick search, thumb friendly.</Text>
               </View>
-              <View className="rounded-full bg-[#f8fafc] px-2.5 py-1">
-                <Text className="text-[10px] font-bold text-[#6b7280]">Options</Text>
+              <View className={`rounded-full px-2.5 py-1 ${isDark ? "bg-[#1f2937]" : "bg-[#f8fafc]"}`}>
+                <Text className={`text-[10px] font-bold ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Options</Text>
               </View>
             </View>
 
             <View className="mt-2 flex-row items-center gap-2">
-              <View className="h-11 flex-1 flex-row items-center rounded-full border border-[#d1d5db] bg-[#f9fafb] px-3">
-                <Text className="mr-2 text-base text-[#9ca3af]">⌕</Text>
-                <TextInput
-                  ref={(instance) => {
-                    searchInputRef.current = instance;
-                  }}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholder="Where to?"
-                  placeholderTextColor="#9ca3af"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  returnKeyType="search"
-                  onSubmitEditing={executeSearchSubmit}
-                  className="flex-1 text-[15px] text-[#111827]"
-                />
-              </View>
+              <Pressable
+                className={`h-12 flex-1 flex-row items-center rounded-2xl border px-3 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#d1d5db] bg-[#f9fafb]"}`}
+                onPress={openSearchModal}
+              >
+                <Text className={`mr-2 text-base ${isDark ? "text-[#6b7280]" : "text-[#9ca3af]"}`}>⌕</Text>
+                <Text className={`flex-1 text-[15px] ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`} numberOfLines={1}>
+                  {searchQuery.trim() ? searchQuery : "Where to?"}
+                </Text>
+              </Pressable>
 
               <Pressable
-                className="h-11 w-14 items-center justify-center rounded-full bg-[#facc15]"
+                className="h-12 w-14 items-center justify-center rounded-2xl bg-[#facc15]"
                 onPress={() => {
-                  void executeSearchSubmit();
+                  openSearchModal();
                 }}
               >
                 <Text className="text-[12px] font-black text-[#111827]">Go</Text>
               </Pressable>
             </View>
 
-            {searchLoading ? <Text className="mt-2 text-xs text-[#0369a1]">Searching...</Text> : null}
-            {searchError ? <Text className="mt-2 text-xs text-[#b45309]">{searchError}</Text> : null}
-            {searchResults.length ? (
-              <View className="mt-2 gap-1" style={{ maxHeight: 150 }}>
-                <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false}>
-                  {searchResults.map((result) => (
-                    <Pressable
-                      key={result.id}
-                      className="mb-1 rounded-xl border border-[#e5e7eb] bg-white px-3 py-2.5"
-                      onPress={() => {
-                        setSearchQuery(result.label);
-                        setSearchResults([]);
-                        applyDestination({ latitude: result.latitude, longitude: result.longitude });
-                      }}
-                    >
-                      <Text className="text-xs text-[#111827]" numberOfLines={2}>{result.label}</Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
-              </View>
-            ) : null}
-
             <View className="mt-3 flex-row items-end justify-between">
               <View>
-                <Text className="text-[10px] uppercase tracking-[1.6px] text-[#6b7280]">Route</Text>
-                <Text className="mt-1 text-xs text-[#4b5563]">{gpsStatus}</Text>
+                <Text className={`text-[10px] uppercase tracking-[1.6px] ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Route</Text>
+                <Text className={`mt-1 text-xs ${isDark ? "text-[#d1d5db]" : "text-[#4b5563]"}`}>{gpsStatus}</Text>
               </View>
 
               <View className="flex-row items-center gap-2">
-                <View className="rounded-2xl bg-[#f9fafb] px-2.5 py-1.5">
-                  <Text className="text-[9px] uppercase text-[#6b7280]">ETA</Text>
-                  <Text className="text-xs font-bold text-[#111827]">
+                <View className={`rounded-2xl px-2.5 py-1.5 ${isDark ? "bg-[#1f2937]" : "bg-[#f9fafb]"}`}>
+                  <Text className={`text-[9px] uppercase ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>ETA</Text>
+                  <Text className={`text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>
                     {routeMetrics ? `${Math.max(1, Math.round(routeMetrics.etaSeconds / 60))} min` : "-"}
                   </Text>
                 </View>
-                <View className="rounded-2xl bg-[#f9fafb] px-2.5 py-1.5">
-                  <Text className="text-[9px] uppercase text-[#6b7280]">Km</Text>
-                  <Text className="text-xs font-bold text-[#111827]">
+                <View className={`rounded-2xl px-2.5 py-1.5 ${isDark ? "bg-[#1f2937]" : "bg-[#f9fafb]"}`}>
+                  <Text className={`text-[9px] uppercase ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Km</Text>
+                  <Text className={`text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>
                     {routeMetrics ? `${(routeMetrics.distanceMeters / 1000).toFixed(1)}` : "-"}
                   </Text>
                 </View>
@@ -1066,13 +1193,13 @@ export function HomeScreen() {
             </View>
 
             <View className="mt-2 flex-row flex-wrap gap-2">
-              <View className="rounded-full bg-[#f9fafb] px-2.5 py-1.5">
-                <Text className="text-[10px] uppercase text-[#6b7280]">Heading</Text>
-                <Text className="text-xs font-bold text-[#111827]">{routeMetrics ? `${routeMetrics.headingDeg}°` : "-"}</Text>
+              <View className={`rounded-full px-2.5 py-1.5 ${isDark ? "bg-[#1f2937]" : "bg-[#f9fafb]"}`}>
+                <Text className={`text-[10px] uppercase ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Heading</Text>
+                <Text className={`text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>{routeMetrics ? `${routeMetrics.headingDeg}°` : "-"}</Text>
               </View>
-              <View className="rounded-full bg-[#f9fafb] px-2.5 py-1.5">
-                <Text className="text-[10px] uppercase text-[#6b7280]">Status</Text>
-                <Text className="text-xs font-bold text-[#111827]">{routeLoading ? "Loading" : "Ready"}</Text>
+              <View className={`rounded-full px-2.5 py-1.5 ${isDark ? "bg-[#1f2937]" : "bg-[#f9fafb]"}`}>
+                <Text className={`text-[10px] uppercase ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Status</Text>
+                <Text className={`text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>{routeLoading ? "Loading" : "Ready"}</Text>
               </View>
             </View>
 
@@ -1115,10 +1242,22 @@ export function HomeScreen() {
             {routeError ? <Text className="mt-2 text-xs text-[#b45309]">{routeError}</Text> : null}
           </View>
 
-          <View className="mt-3 rounded-xl border border-[#e5e7eb] px-3 py-3">
-            <Text className="text-[11px] uppercase tracking-wide text-[#6b7280]">Instruction Delivery</Text>
+          <View className={`mt-3 rounded-xl border px-3 py-3 ${isDark ? "border-[#1f2937]" : "border-[#e5e7eb]"}`}>
+            <Text className={`text-[11px] uppercase tracking-wide ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Instruction Delivery</Text>
             <Text className={`mt-1 text-sm font-extrabold ${deliveryStatus.tone}`}>{deliveryStatus.label}</Text>
-            <Text className="mt-1 text-xs text-[#4b5563]">{deliveryStatus.detail}</Text>
+            <Text className={`mt-1 text-xs ${isDark ? "text-[#d1d5db]" : "text-[#4b5563]"}`}>{deliveryStatus.detail}</Text>
+          </View>
+
+          <View className={`mt-3 rounded-xl border px-3 py-3 ${isDark ? "border-[#1f2937] bg-[#0f172a]" : "border-[#e5e7eb] bg-[#f9fafb]"}`}>
+            <Text className={`text-[11px] uppercase tracking-wide ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>BLE Debug</Text>
+            <Text className={`mt-1 text-xs ${isDark ? "text-[#e5e7eb]" : "text-[#111827]"}`}>Connected: {isConnected ? "Yes" : "No"}</Text>
+            <Text className={`text-xs ${isDark ? "text-[#e5e7eb]" : "text-[#111827]"}`}>Scanning: {isScanning ? "Yes" : "No"}</Text>
+            <Text className={`text-xs ${isDark ? "text-[#e5e7eb]" : "text-[#111827]"}`}>Device: {bleDebug.deviceName ?? connectedDeviceName ?? "-"}</Text>
+            <Text className={`text-xs ${isDark ? "text-[#e5e7eb]" : "text-[#111827]"}`}>Device ID: {bleDebug.deviceId ?? connectedDeviceId ?? "-"}</Text>
+            <Text className={`text-xs ${isDark ? "text-[#e5e7eb]" : "text-[#111827]"}`}>Requested MTU: {bleDebug.requestedMtu ?? "-"}</Text>
+            <Text className={`text-xs ${isDark ? "text-[#e5e7eb]" : "text-[#111827]"}`}>Negotiated MTU: {bleDebug.negotiatedMtu ?? "-"}</Text>
+            <Text className={`text-xs ${isDark ? "text-[#e5e7eb]" : "text-[#111827]"}`}>Service UUID: {bleDebug.cachedServiceUuid ?? "-"}</Text>
+            <Text className={`text-xs ${isDark ? "text-[#e5e7eb]" : "text-[#111827]"}`}>Write Char UUID: {bleDebug.cachedCharacteristicUuid ?? "-"}</Text>
           </View>
 
           {error ? <Text className="mt-2 text-xs text-[#dc2626]">{error}</Text> : null}
@@ -1154,6 +1293,114 @@ export function HomeScreen() {
           </View>
         </ScrollView>
       </View>
-    </View>
+
+      <Modal visible={isSearchModalOpen} animationType="slide" transparent onRequestClose={() => setIsSearchModalOpen(false)}>
+        <KeyboardAvoidingView
+          className="flex-1 bg-black/40"
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 40 : 0}
+        >
+          <View className={`mt-24 flex-1 rounded-t-3xl px-5 pt-5 ${isDark ? "bg-[#111827]" : "bg-white"}`}>
+            <View className="flex-row items-center gap-2">
+              <View className={`h-12 flex-1 flex-row items-center rounded-2xl border px-3 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#d1d5db] bg-[#f9fafb]"}`}>
+                <Text className={`mr-2 text-base ${isDark ? "text-[#6b7280]" : "text-[#9ca3af]"}`}>⌕</Text>
+                <TextInput
+                  ref={(instance) => {
+                    modalSearchInputRef.current = instance;
+                    searchInputRef.current = instance;
+                  }}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="Search destination"
+                  placeholderTextColor={isDark ? "#6b7280" : "#9ca3af"}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="search"
+                  onSubmitEditing={executeSearchSubmit}
+                  className={`flex-1 text-[15px] ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}
+                />
+                {searchQuery.trim().length ? (
+                  <Pressable
+                    className={`ml-2 h-7 w-7 items-center justify-center rounded-full ${isDark ? "bg-[#374151]" : "bg-[#e5e7eb]"}`}
+                    onPress={() => {
+                      setSearchQuery("");
+                      setSearchResults([]);
+                      setSearchError(undefined);
+                      modalSearchInputRef.current?.focus();
+                    }}
+                  >
+                    <Text className={`text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>x</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+
+              <Pressable
+                className={`h-12 items-center justify-center rounded-2xl border px-4 ${isDark ? "border-[#374151]" : "border-[#d1d5db]"}`}
+                onPress={() => setIsSearchModalOpen(false)}
+              >
+                <Text className={`text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>Close</Text>
+              </Pressable>
+            </View>
+
+            {searchLoading ? <Text className="mt-3 text-xs text-[#0369a1]">Searching...</Text> : null}
+            {searchError ? <Text className="mt-3 text-xs text-[#b45309]">{searchError}</Text> : null}
+
+            {!searchQuery.trim().length && recentSearches.length ? (
+              <View className="mt-3">
+                <View className="mb-2 flex-row items-center justify-between">
+                  <Text className={`text-[11px] font-bold uppercase tracking-wide ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Recent Searches</Text>
+                  <Pressable
+                    onPress={() => setRecentSearches([])}
+                    className={`rounded-full border px-2 py-1 ${isDark ? "border-[#374151]" : "border-[#d1d5db]"}`}
+                  >
+                    <Text className={`text-[10px] font-bold ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Clear all</Text>
+                  </Pressable>
+                </View>
+                <View className="flex-row flex-wrap gap-2">
+                  {recentSearches.map((item) => (
+                    <Pressable
+                      key={item.id}
+                      className={`rounded-full border px-3 py-2 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#e5e7eb] bg-[#f9fafb]"}`}
+                      onPress={() => {
+                        setSearchQuery(item.label);
+                        setSearchResults([]);
+                        setSearchError(undefined);
+                        addRecentSearch(item);
+                        applyDestination({ latitude: item.latitude, longitude: item.longitude });
+                        setIsSearchModalOpen(false);
+                      }}
+                    >
+                      <Text className={`text-xs ${isDark ? "text-[#e5e7eb]" : "text-[#111827]"}`} numberOfLines={1}>{item.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
+            <ScrollView className="mt-3" contentContainerStyle={{ paddingBottom: 30 }} keyboardShouldPersistTaps="handled">
+              {searchResults.map((result) => (
+                <Pressable
+                  key={result.id}
+                  className={`mb-2 rounded-xl border px-3 py-3 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#e5e7eb] bg-white"}`}
+                  onPress={() => {
+                    setSearchQuery(result.label);
+                    setSearchResults([]);
+                    addRecentSearch({
+                      label: result.label,
+                      latitude: result.latitude,
+                      longitude: result.longitude
+                    });
+                    applyDestination({ latitude: result.latitude, longitude: result.longitude });
+                    setIsSearchModalOpen(false);
+                  }}
+                >
+                  <Text className={`text-sm ${isDark ? "text-[#e5e7eb]" : "text-[#111827]"}`} numberOfLines={2}>{result.label}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    </KeyboardAvoidingView>
   );
 }

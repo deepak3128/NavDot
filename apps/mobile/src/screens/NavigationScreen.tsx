@@ -24,6 +24,7 @@ export function NavigationScreen() {
   const [isRideActive, setIsRideActive] = useState(false);
   const [rideBusy, setRideBusy] = useState(false);
 
+
   useEffect(() => {
     let mounted = true;
 
@@ -101,13 +102,15 @@ export function NavigationScreen() {
   };
 
   return (
-    <ScrollView
-      className={`flex-1 px-5 pt-10 ${isDark ? "bg-[#0b1220]" : "bg-[#f3f4f6]"}`}
-      contentContainerStyle={{ paddingBottom: 92 }}
-    >
-      <View className={`absolute -left-10 top-16 h-36 w-36 rounded-full ${isDark ? "bg-[#1f2937]" : "bg-[#ffbfa5]"} opacity-68`} />
-      <View className={`absolute -right-10 -top-6 h-36 w-36 rounded-full ${isDark ? "bg-[#1e3a8a]" : "bg-[#bcd5ff]"} opacity-68`} />
-
+    <View className={`flex-1 ${isDark ? "bg-[#0b1220]" : "bg-[#f3f4f6]"}`}>
+      <View pointerEvents="none" className={`absolute -left-10 top-16 h-36 w-36 rounded-full ${isDark ? "bg-[#1f2937]" : "bg-[#ffbfa5]"} opacity-68 z-0`} />
+      <View pointerEvents="none" className={`absolute -right-10 -top-6 h-36 w-36 rounded-full ${isDark ? "bg-[#1e3a8a]" : "bg-[#bcd5ff]"} opacity-68 z-0`} />
+      
+      {/* Scrollable content */}
+      <ScrollView
+        className={`flex-1 px-5 pt-10 ${isDark ? "bg-[#0b1220]" : "bg-[#f3f4f6]"}`}
+        contentContainerStyle={{ paddingBottom: 92 }}
+      >
       <Text className={`text-3xl font-black tracking-tight ${isDark ? "text-[#f9fafb]" : "text-[#111827]"}`}>Navigation</Text>
       <Text className={`mt-1 max-w-[330px] text-sm leading-6 ${isDark ? "text-[#9ca3af]" : "text-[#4b5563]"}`}>
         Stream heading at 10Hz and keep your map context synced with adaptive tile refresh.
@@ -212,5 +215,6 @@ export function NavigationScreen() {
       </View>
 
     </ScrollView>
+    </View>
   );
 }

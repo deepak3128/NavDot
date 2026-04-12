@@ -1,17 +1,19 @@
 import "react-native-get-random-values";
 import "./global.css";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { StatusBar } from "expo-status-bar";
 import { Feather } from "@expo/vector-icons";
 import { NavigationContainer, DarkTheme, DefaultTheme } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { Platform, PermissionsAndroid, Alert, View, Text, ActivityIndicator, Linking } from "react-native";
 import { HomeScreen } from "./src/screens/HomeScreen";
 import { NavigationScreen } from "./src/screens/NavigationScreen";
 import ProfileScreen from "./src/screens/ProfileScreen";
 import { ActivityScreen } from "./src/screens/ActivityScreen";
 import { AuthScreen } from "./src/screens/AuthScreen";
 import { bleService } from "./src/services/bleService";
+import { getCurrentSession } from "./src/services/authService";
 import { useAuthStore } from "./src/store/useAuthStore";
 import { useSettingsStore } from "./src/store/useSettingsStore";
 
@@ -41,21 +43,143 @@ const darkNavTheme = {
   }
 };
 
+async function checkLocationServiceEnabled(): Promise<boolean> {
+  if (Platform.OS !== "android") {
+    return true;
+  }
+
+  try {
+    // Simply alert user to enable location service
+    // Full check requires additional native module
+    return true;
+  } catch (err) {
+    console.warn("Location service check error:", err);
+    return true;
+  }
+}
+
+async function requestLocationPermission(): Promise<boolean> {
+  if (Platform.OS !== "android") {
+    return true;
+  }
+
+  try {
+    const granted = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      {
+        title: "Location Permission",
+        message: "NavDot needs access to your location for navigation and route planning.",
+        buttonNeutral: "Ask Me Later",
+        buttonNegative: "Cancel",
+        buttonPositive: "Allow"
+      }
+    );
+    
+    // After permission is granted, show alert with manual instructions
+    if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+      setTimeout(() => {
+        Alert.alert(
+          "Enable Location Service",
+          "You've granted the app permission. Now please:\n\n1. Open Settings on your phone\n2. Go to Location (or Connections)\n3. Turn ON the Location toggle\n4. Select 'High Accuracy' mode",
+          [
+            { 
+              text: "I've Enabled It", 
+              onPress: () => {
+                console.log("User enabled location service");
+              }
+            }
+          ]
+        );
+      }, 500);
+    }
+    
+    return granted === PermissionsAndroid.RESULTS.GRANTED;
+  } catch (err) {
+    console.warn("Location permission error:", err);
+    return false;
+  }
+}
+
+async function requestBluetoothPermission(): Promise<boolean> {
+  if (Platform.OS !== "android") {
+    return true;
+  }
+
+  try {
+    const result = await bleService.requestPermissions();
+    if (!result) {
+      Alert.alert(
+        "Permissions Required",
+        "Bluetooth and Location permissions are needed for device pairing and navigation features."
+      );
+    }
+    return result;
+  } catch (err) {
+    console.warn(err);
+    return false;
+  }
+}
+
 export default function App() {
   const token = useAuthStore((state) => state.token);
   const isReady = useAuthStore((state) => state.isReady);
+  const setSession = useAuthStore((state) => state.setSession);
+  const clearSession = useAuthStore((state) => state.clearSession);
+  const setReady = useAuthStore((state) => state.setReady);
   const themeMode = useSettingsStore((state) => state.themeMode);
   const isDark = themeMode === "dark";
   const navTheme = isDark ? darkNavTheme : lightNavTheme;
+  const [permissionsRequested, setPermissionsRequested] = useState(false);
 
   useEffect(() => {
     const bootstrap = async () => {
-      await bleService.requestPermissions();
-      await bleService.autoConnectPreferredDevice();
+      try {
+        // Request location permission (includes reminder to enable service)
+        const locationGranted = await requestLocationPermission();
+        
+        // Then request Bluetooth permission
+        const bluetoothGranted = await requestBluetoothPermission();
+        
+        // Attempt to auto-connect to preferred device
+        await bleService.autoConnectPreferredDevice();
+        
+        if (!locationGranted || !bluetoothGranted) {
+          Alert.alert(
+            "Permissions Incomplete",
+            "Some features may not work without Bluetooth and Location permissions enabled."
+          );
+        }
+      } catch (err) {
+        console.error("Permission request error:", err);
+      } finally {
+        setPermissionsRequested(true);
+      }
     };
 
     void bootstrap();
   }, []);
+
+  useEffect(() => {
+    const bootstrapAuth = async () => {
+      // Wait for permissions to be requested first
+      if (!permissionsRequested) {
+        return;
+      }
+
+      try {
+        const currentSession = await getCurrentSession();
+        if (currentSession) {
+          setSession(currentSession);
+        } else {
+          clearSession();
+        }
+      } finally {
+        setReady(true);
+      }
+    };
+
+    void bootstrapAuth();
+  }, [permissionsRequested, clearSession, setReady, setSession]);
 
   return (
     <SafeAreaProvider>

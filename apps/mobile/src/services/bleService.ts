@@ -7,12 +7,30 @@ type BleModule = typeof import("react-native-ble-plx");
 const bleModule: BleModule | undefined =
   Platform.OS === "web" ? undefined : (require("react-native-ble-plx") as BleModule);
 
-const NAVDOT_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
-const NAVDOT_HEADING_CHAR_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
+const NAVDOT_DEVICE_NAME = "navdot";
+const NAVDOT_SERVICE_UUID = "0000FF00-0000-1000-8000-00805F9B34FB";
+const NAVDOT_WRITE_CHAR_UUID = "0000FF01-0000-1000-8000-00805F9B34FB";
+
+function normalizeUuid(value: string | undefined): string {
+  return (value ?? "").replace(/-/g, "").toLowerCase();
+}
+
+function uuidMatches(target: string, candidate: string | undefined): boolean {
+  const targetNormalized = normalizeUuid(target);
+  const candidateNormalized = normalizeUuid(candidate);
+  return targetNormalized === candidateNormalized || targetNormalized.endsWith(candidateNormalized) || candidateNormalized.endsWith(targetNormalized);
+}
 
 class BleService {
   private manager?: import("react-native-ble-plx").BleManager;
   private connectedDevice?: import("react-native-ble-plx").Device;
+  private scanStopTimer?: ReturnType<typeof setTimeout>;
+  private requestedMtu?: number;
+  private negotiatedMtu?: number;
+  private cachedWriteCharacteristic?: {
+    serviceUUID: string;
+    characteristicUUID: string;
+  };
 
   constructor() {
     if (!bleModule) {
@@ -70,9 +88,15 @@ class BleService {
       return;
     }
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        subscription.remove();
+        reject(new Error("Bluetooth is off. Please turn on Bluetooth and try again."));
+      }, 8000);
+
       const subscription = manager.onStateChange((nextState) => {
         if (nextState === "PoweredOn") {
+          clearTimeout(timeout);
           subscription.remove();
           resolve();
         }
@@ -86,6 +110,7 @@ class BleService {
     }
 
     const manager = this.manager!;
+    this.stopScan();
 
     const store = useBleStore.getState();
     store.setDevices([]);
@@ -105,15 +130,21 @@ class BleService {
         return;
       }
 
-      const name = device.name || device.localName || "NavDot device";
+      const name = device.name || device.localName || "Unknown device";
+      if (!name.toLowerCase().includes(NAVDOT_DEVICE_NAME)) {
+        return;
+      }
+
       const rssi = device.rssi ?? -100;
       seen.set(device.id, { id: device.id, name, rssi });
 
-      const devices = [...seen.values()].sort((a, b) => b.rssi - a.rssi);
+      const devices = [...seen.values()]
+        .sort((a, b) => b.rssi - a.rssi)
+        .slice(0, 25);
       useBleStore.getState().setDevices(devices);
     });
 
-    setTimeout(() => {
+    this.scanStopTimer = setTimeout(() => {
       this.stopScan();
     }, 10000);
   }
@@ -121,6 +152,11 @@ class BleService {
   stopScan(): void {
     if (!this.manager) {
       return;
+    }
+
+    if (this.scanStopTimer) {
+      clearTimeout(this.scanStopTimer);
+      this.scanStopTimer = undefined;
     }
 
     this.manager.stopDeviceScan();
@@ -137,7 +173,22 @@ class BleService {
     try {
       const device = await manager.connectToDevice(deviceId, { autoConnect: false });
       await device.discoverAllServicesAndCharacteristics();
+
+      if (Platform.OS === "android") {
+        try {
+          this.requestedMtu = 247;
+          const mtuDevice = await device.requestMTU(247);
+          this.negotiatedMtu = mtuDevice.mtu;
+        } catch {
+          // Some devices/OS versions reject MTU change. Keep default and continue.
+          this.negotiatedMtu = undefined;
+        }
+      }
+
       this.connectedDevice = device;
+      this.cachedWriteCharacteristic = undefined;
+
+      await this.cacheWriteCharacteristic(device);
 
       const name = device.name || device.localName || "NavDot device";
       const store = useBleStore.getState();
@@ -147,6 +198,8 @@ class BleService {
 
       device.onDisconnected(() => {
         this.connectedDevice = undefined;
+        this.cachedWriteCharacteristic = undefined;
+        this.negotiatedMtu = undefined;
         useBleStore.getState().setConnectedDevice(undefined, undefined);
       });
     } catch (error) {
@@ -206,11 +259,7 @@ class BleService {
     });
 
     const base64Payload = Buffer.from(payload, "utf-8").toString("base64");
-    await this.connectedDevice.writeCharacteristicWithResponseForService(
-      NAVDOT_SERVICE_UUID,
-      NAVDOT_HEADING_CHAR_UUID,
-      base64Payload
-    );
+    await this.writeToNavDot(base64Payload);
   }
 
   async writeDestinationPacket(packet: {
@@ -231,11 +280,93 @@ class BleService {
     });
 
     const base64Payload = Buffer.from(payload, "utf-8").toString("base64");
+    await this.writeToNavDot(base64Payload);
+  }
+
+  async writeNavigationDataPacket(packet: {
+    direction: string;
+    distance: number;
+    speed: number;
+    polyline: Array<[number, number]>;
+  }): Promise<void> {
+    if (!this.connectedDevice || !this.manager) {
+      throw new Error("No connected BLE device.");
+    }
+
+    const payload = JSON.stringify({
+      ts: Date.now(),
+      type: "navigation",
+      direction: packet.direction,
+      distance: Math.max(0, Math.round(packet.distance)),
+      speed: Math.max(0, Math.round(packet.speed)),
+      polyline: packet.polyline
+    });
+
+    const base64Payload = Buffer.from(payload, "utf-8").toString("base64");
+    await this.writeToNavDot(base64Payload);
+  }
+
+  private async cacheWriteCharacteristic(device: import("react-native-ble-plx").Device): Promise<void> {
+    const services = await device.services();
+
+    for (const service of services) {
+      const isNavDotService = uuidMatches(NAVDOT_SERVICE_UUID, service.uuid);
+      if (!isNavDotService) {
+        continue;
+      }
+
+      const characteristics = await device.characteristicsForService(service.uuid);
+      const writable = characteristics.find(
+        (characteristic) =>
+          uuidMatches(NAVDOT_WRITE_CHAR_UUID, characteristic.uuid) &&
+          (characteristic.isWritableWithResponse || characteristic.isWritableWithoutResponse)
+      );
+
+      if (writable) {
+        this.cachedWriteCharacteristic = {
+          serviceUUID: service.uuid,
+          characteristicUUID: writable.uuid
+        };
+        return;
+      }
+    }
+
+    throw new Error("Could not find writable NavDot characteristic (0xFF01).");
+  }
+
+  private async writeToNavDot(base64Payload: string): Promise<void> {
+    if (!this.connectedDevice) {
+      throw new Error("No connected BLE device.");
+    }
+
+    if (!this.cachedWriteCharacteristic) {
+      await this.cacheWriteCharacteristic(this.connectedDevice);
+    }
+
+    const target = this.cachedWriteCharacteristic!;
     await this.connectedDevice.writeCharacteristicWithResponseForService(
-      NAVDOT_SERVICE_UUID,
-      NAVDOT_HEADING_CHAR_UUID,
+      target.serviceUUID,
+      target.characteristicUUID,
       base64Payload
     );
+  }
+
+  getDebugState(): {
+    deviceId?: string;
+    deviceName?: string;
+    requestedMtu?: number;
+    negotiatedMtu?: number;
+    cachedServiceUuid?: string;
+    cachedCharacteristicUuid?: string;
+  } {
+    return {
+      deviceId: this.connectedDevice?.id,
+      deviceName: this.connectedDevice?.name ?? this.connectedDevice?.localName,
+      requestedMtu: this.requestedMtu,
+      negotiatedMtu: this.negotiatedMtu,
+      cachedServiceUuid: this.cachedWriteCharacteristic?.serviceUUID,
+      cachedCharacteristicUuid: this.cachedWriteCharacteristic?.characteristicUUID
+    };
   }
 }
 
