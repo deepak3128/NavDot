@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { loginUser, registerUser } from "../services/authService";
+import { loginUser, loginWithOAuth, registerUser, type OAuthProvider } from "../services/authService";
 import { useAuthStore } from "../store/useAuthStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 
@@ -16,6 +16,21 @@ export function AuthScreen() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | undefined>();
+
+  const signInWithProvider = async (provider: OAuthProvider) => {
+    setBusy(true);
+    setMessage(undefined);
+
+    try {
+      const session = await loginWithOAuth(provider);
+      setSession(session);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "Social authentication failed.";
+      setMessage(text);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const submit = async () => {
     if (!email.trim() || !password.trim()) {
@@ -139,6 +154,26 @@ export function AuthScreen() {
               <Text className="text-center font-bold text-white">{mode === "login" ? "Login" : "Create Account"}</Text>
             )}
           </Pressable>
+
+          <View className="mt-4">
+            <Text className={`text-center text-xs ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>or continue with</Text>
+
+            <Pressable
+              className={`mt-3 rounded-2xl border px-4 py-3 ${isDark ? "border-[#374151] bg-[#0f172a]" : "border-[#d1d5db] bg-[#f9fafb]"}`}
+              onPress={() => void signInWithProvider("google")}
+              disabled={busy}
+            >
+              <Text className={`text-center font-bold ${isDark ? "text-[#f9fafb]" : "text-[#111827]"}`}>{mode === "signup" ? "Sign up with Google" : "Sign in with Google"}</Text>
+            </Pressable>
+
+            <Pressable
+              className={`mt-2 rounded-2xl border px-4 py-3 ${isDark ? "border-[#374151] bg-[#0f172a]" : "border-[#d1d5db] bg-[#f9fafb]"}`}
+              onPress={() => void signInWithProvider("apple")}
+              disabled={busy}
+            >
+              <Text className={`text-center font-bold ${isDark ? "text-[#f9fafb]" : "text-[#111827]"}`}>{mode === "signup" ? "Sign up with Apple" : "Sign in with Apple"}</Text>
+            </Pressable>
+          </View>
 
           {message ? <Text className="mt-3 text-sm text-[#dc2626]">{message}</Text> : null}
         </View>

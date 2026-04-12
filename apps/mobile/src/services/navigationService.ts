@@ -15,6 +15,9 @@ type Snapshot = {
 let streamTimer: ReturnType<typeof setInterval> | undefined;
 let lastSnapshot: Snapshot = {};
 let lastDestinationSentAt: string | undefined;
+let lastRoutePacketAttemptAt = 0;
+
+const ROUTE_PACKET_DEBOUNCE_MS = 350;
 
 async function refreshTilesIfNeeded(): Promise<void> {
   const nav = useNavStore.getState();
@@ -61,6 +64,33 @@ async function sendHeadingPacket(): Promise<void> {
   const nav = useNavStore.getState();
   if (!nav.hasGpsFix) {
     return;
+  }
+
+  const currentDirection = nav.currentDirection;
+  const routeSpeed = nav.speed ?? (nav.speedMps ?? 0) * 3.6;
+  const canSendRoutePacket =
+    nav.isRouteDirty &&
+    currentDirection &&
+    nav.polyline.length > 0 &&
+    Date.now() - lastRoutePacketAttemptAt >= ROUTE_PACKET_DEBOUNCE_MS;
+
+  if (canSendRoutePacket) {
+    lastRoutePacketAttemptAt = Date.now();
+
+    try {
+      await bleService.writeNavigationDataPacket({
+        direction: currentDirection,
+        distance: nav.distance ?? 0,
+        speed: routeSpeed,
+        polyline: nav.polyline
+      });
+
+      useNavStore.getState().markNavigationRouteClean();
+    } catch (error) {
+      useNavStore.getState().setStatusMessage(
+        error instanceof Error ? error.message : "Unable to send navigation route packet"
+      );
+    }
   }
 
   const destination = nav.destination
@@ -143,6 +173,7 @@ export async function stopNavigationStreaming(): Promise<void> {
   }
 
   lastDestinationSentAt = undefined;
+  lastRoutePacketAttemptAt = 0;
 
   useNavStore.getState().setStatusMessage("Navigation paused");
 }

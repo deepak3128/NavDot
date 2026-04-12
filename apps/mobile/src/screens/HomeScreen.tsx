@@ -47,6 +47,11 @@ type SearchResult = {
   longitude: number;
 };
 
+type RoutePoint = {
+  latitude: number;
+  longitude: number;
+};
+
 type RecentSearch = {
   id: string;
   label: string;
@@ -74,6 +79,7 @@ export function HomeScreen() {
   const [lastPacketAt, setLastPacketAt] = useState<string | undefined>();
   const [showHubCard, setShowHubCard] = useState(true);
   const [currentPosition, setCurrentPosition] = useState<{ latitude: number; longitude: number }>();
+  const [selectedOrigin, setSelectedOrigin] = useState<{ latitude: number; longitude: number; label?: string }>();
   const [currentSpeedMps, setCurrentSpeedMps] = useState<number>(0);
   const [routeOptions, setRouteOptions] = useState<RouteOption[]>([]);
   const [activeRouteIndex, setActiveRouteIndex] = useState(0);
@@ -82,9 +88,11 @@ export function HomeScreen() {
   const [routeError, setRouteError] = useState<string | undefined>();
   const [routeSummary, setRouteSummary] = useState<{ distanceMeters: number; etaSeconds: number; headingDeg: number }>();
   const [searchQuery, setSearchQuery] = useState("");
+  const [originQuery, setOriginQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | undefined>();
+  const [activeSearchField, setActiveSearchField] = useState<"from" | "to">("to");
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
   const [gpsStatus, setGpsStatus] = useState("Auto-fetching current location...");
@@ -94,13 +102,17 @@ export function HomeScreen() {
   const navDestination = useNavStore((state) => state.destination);
   const isRideModeActive = useNavStore((state) => state.isRideModeActive);
   const rideCommandToken = useNavStore((state) => state.rideCommandToken);
+  const setNavigationRoute = useNavStore((state) => state.setNavigationRoute);
+  const setNavigationTelemetry = useNavStore((state) => state.setNavigationTelemetry);
+  const resetNavigationRoute = useNavStore((state) => state.resetNavigationRoute);
   const navigation = useNavigation();
   const mapRef = useRef<MapView | null>(null);
   const bottomScrollRef = useRef<ScrollView | null>(null);
   const routeAbortRef = useRef<AbortController | null>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
   const searchInputRef = useRef<TextInput | null>(null);
-  const modalSearchInputRef = useRef<TextInput | null>(null);
+  const modalFromInputRef = useRef<TextInput | null>(null);
+  const modalToInputRef = useRef<TextInput | null>(null);
   const hasCenteredToCurrentRef = useRef(false);
   const selectedDestinationRef = useRef<{ latitude: number; longitude: number } | undefined>(undefined);
   const lastRouteRefreshAtRef = useRef(0);
@@ -135,6 +147,7 @@ export function HomeScreen() {
     if (!active) {
       setRoutePath([]);
       setRouteSummary(undefined);
+      resetNavigationRoute();
       return;
     }
 
@@ -144,7 +157,20 @@ export function HomeScreen() {
       etaSeconds: active.etaSeconds,
       headingDeg: active.headingDeg
     });
+    setNavigationRoute({
+      currentDirection: active.direction,
+      distance: active.nextTurnDistanceMeters || active.distanceMeters,
+      polyline: normalizeRoutePolyline(active.path)
+    });
   }, [activeRouteIndex, routeOptions]);
+
+  useEffect(() => {
+    setNavigationTelemetry({
+      speed: currentSpeedMps > 0 ? currentSpeedMps * 3.6 : 0
+    });
+  }, [currentSpeedMps, setNavigationTelemetry]);
+
+  const effectiveRouteOrigin = selectedOrigin ?? currentPosition;
 
   const focusOnRoute = (path: Array<{ latitude: number; longitude: number }>) => {
     if (!path.length || !mapRef.current) {
@@ -163,17 +189,17 @@ export function HomeScreen() {
       return routeSummary;
     }
 
-    if (!currentPosition || !selectedDestination) {
+    if (!effectiveRouteOrigin || !selectedDestination) {
       return undefined;
     }
 
-    const distanceMeters = haversineDistanceMeters(currentPosition, selectedDestination);
+    const distanceMeters = haversineDistanceMeters(effectiveRouteOrigin, selectedDestination);
     const speedMps = currentSpeedMps > 1 ? currentSpeedMps : 4.1;
     const etaSeconds = Math.round(distanceMeters / speedMps);
 
-    const lat1 = (currentPosition.latitude * Math.PI) / 180;
+    const lat1 = (effectiveRouteOrigin.latitude * Math.PI) / 180;
     const lat2 = (selectedDestination.latitude * Math.PI) / 180;
-    const dLon = ((selectedDestination.longitude - currentPosition.longitude) * Math.PI) / 180;
+    const dLon = ((selectedDestination.longitude - effectiveRouteOrigin.longitude) * Math.PI) / 180;
     const y = Math.sin(dLon) * Math.cos(lat2);
     const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
     const heading = (Math.atan2(y, x) * 180) / Math.PI;
@@ -184,7 +210,7 @@ export function HomeScreen() {
       etaSeconds,
       headingDeg: Math.round(normalizedHeading)
     };
-  }, [currentPosition, currentSpeedMps, routeSummary, selectedDestination]);
+  }, [effectiveRouteOrigin, currentSpeedMps, routeSummary, selectedDestination]);
 
   const routeTagsByIndex = useMemo(() => {
     if (!routeOptions.length) {
@@ -218,7 +244,7 @@ export function HomeScreen() {
     });
   }, [routeOptions]);
 
-  const normalizeRoutePolyline = (points: Array<{ latitude: number; longitude: number }>): Array<[number, number]> => {
+  const normalizeRoutePolyline = (points: RoutePoint[]): Array<[number, number]> => {
     if (!points.length) {
       return [];
     }
@@ -241,8 +267,8 @@ export function HomeScreen() {
   const bleDebug = useMemo(() => bleService.getDebugState(), [connectedDeviceId, isConnected, isScanning, devices.length, error]);
 
   const fetchRoadRoute = async (
-    origin: { latitude: number; longitude: number },
-    destination: { latitude: number; longitude: number }
+    origin: RoutePoint,
+    destination: RoutePoint
   ) => {
     routeAbortRef.current?.abort();
     const controller = new AbortController();
@@ -419,7 +445,7 @@ export function HomeScreen() {
     }
   };
 
-  const searchDestination = async (query: string) => {
+  const searchDestination = async (query: string, biasOrigin?: RoutePoint) => {
     const text = query.trim();
     if (text.length < 3) {
       setSearchResults([]);
@@ -436,7 +462,7 @@ export function HomeScreen() {
 
     try {
       const encoded = encodeURIComponent(text);
-      const bias = currentPosition ? `&lat=${currentPosition.latitude}&lon=${currentPosition.longitude}` : "";
+      const bias = biasOrigin ? `&lat=${biasOrigin.latitude}&lon=${biasOrigin.longitude}` : "";
       const url = `https://photon.komoot.io/api/?q=${encoded}&limit=6${bias}`;
 
       const response = await fetch(url, {
@@ -531,7 +557,7 @@ export function HomeScreen() {
     }
   };
 
-  const applyDestination = (destination: { latitude: number; longitude: number }) => {
+  const applyDestination = (destination: RoutePoint) => {
     setSelectedDestination(destination);
     setDestination({
       latitude: destination.latitude,
@@ -559,8 +585,23 @@ export function HomeScreen() {
     setRouteOptions([]);
     setActiveRouteIndex(0);
 
-    if (currentPosition) {
-      void fetchRoadRoute(currentPosition, destination);
+    if (effectiveRouteOrigin) {
+      void fetchRoadRoute(effectiveRouteOrigin, destination);
+    }
+  };
+
+  const applyOrigin = (origin: RoutePoint, label?: string) => {
+    setSelectedOrigin({
+      latitude: origin.latitude,
+      longitude: origin.longitude,
+      label
+    });
+    setOriginQuery(label ?? `${origin.latitude.toFixed(5)}, ${origin.longitude.toFixed(5)}`);
+    setSearchResults([]);
+    setSearchError(undefined);
+
+    if (selectedDestination) {
+      void fetchRoadRoute(origin, selectedDestination);
     }
   };
 
@@ -727,13 +768,15 @@ export function HomeScreen() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      void searchDestination(searchQuery);
+      const query = activeSearchField === "from" ? originQuery : searchQuery;
+      const biasOrigin = activeSearchField === "from" ? selectedOrigin ?? currentPosition : selectedOrigin ?? currentPosition;
+      void searchDestination(query, biasOrigin);
     }, 350);
 
     return () => {
       clearTimeout(timer);
     };
-  }, [currentPosition, searchQuery]);
+  }, [activeSearchField, currentPosition, originQuery, searchQuery, selectedOrigin]);
 
   useFocusEffect(
     useMemo(
@@ -753,20 +796,20 @@ export function HomeScreen() {
         );
 
         const destination = selectedDestinationRef.current;
-        if (destination) {
-          void fetchRoadRoute(currentPosition, destination);
+        if (destination && effectiveRouteOrigin) {
+          void fetchRoadRoute(effectiveRouteOrigin, destination);
           setGpsStatus("Ride mode active. Centered on your position and navigating.");
           return;
         }
 
         setGpsStatus("Ride mode active. Centered on your position.");
       },
-      [currentPosition, isRideModeActive]
+      [currentPosition, effectiveRouteOrigin, isRideModeActive]
     )
   );
 
   useEffect(() => {
-    if (!isRideModeActive || !currentPosition || !selectedDestination) {
+    if (!isRideModeActive || !currentPosition || !selectedDestination || !effectiveRouteOrigin) {
       return;
     }
 
@@ -786,9 +829,9 @@ export function HomeScreen() {
     }
 
     lastRouteRefreshAtRef.current = now;
-    void fetchRoadRoute(currentPosition, selectedDestination);
+    void fetchRoadRoute(effectiveRouteOrigin, selectedDestination);
     setGpsStatus("Ride mode active. Tracking live position.");
-  }, [currentPosition, isRideModeActive, selectedDestination]);
+  }, [currentPosition, effectiveRouteOrigin, isRideModeActive, selectedDestination]);
 
   useEffect(() => {
     if (!isRideModeActive || !currentPosition) {
@@ -805,14 +848,14 @@ export function HomeScreen() {
       750
     );
 
-    if (selectedDestination) {
-      void fetchRoadRoute(currentPosition, selectedDestination);
+    if (selectedDestination && effectiveRouteOrigin) {
+      void fetchRoadRoute(effectiveRouteOrigin, selectedDestination);
       setGpsStatus("Start ride detected. Zoomed to your current position.");
       return;
     }
 
     setGpsStatus("Start ride detected. Current position locked.");
-  }, [currentPosition, isRideModeActive, rideCommandToken, selectedDestination]);
+  }, [currentPosition, effectiveRouteOrigin, isRideModeActive, rideCommandToken, selectedDestination]);
 
   const handleScan = async () => {
     try {
@@ -919,24 +962,6 @@ export function HomeScreen() {
     setSendMessage(undefined);
 
     try {
-      const activeRoute = routeOptions[activeRouteIndex];
-      const fallbackPath = currentPosition
-        ? [currentPosition, selectedDestination]
-        : [selectedDestination];
-      const pathPoints = activeRoute?.path?.length ? activeRoute.path : fallbackPath;
-      const normalizedPolyline = normalizeRoutePolyline(pathPoints);
-
-      const distanceForPacket = activeRoute?.nextTurnDistanceMeters
-        ? activeRoute.nextTurnDistanceMeters
-        : routeMetrics?.distanceMeters ?? haversineDistanceMeters(pathPoints[0], selectedDestination);
-
-      await bleService.writeNavigationDataPacket({
-        direction: activeRoute?.direction ?? "STRAIGHT",
-        distance: distanceForPacket,
-        speed: currentSpeedMps > 0 ? currentSpeedMps * 3.6 : 0,
-        polyline: normalizedPolyline
-      });
-
       await bleService.writeDestinationPacket({
         latitude: selectedDestination.latitude,
         longitude: selectedDestination.longitude,
@@ -964,19 +989,27 @@ export function HomeScreen() {
   const executeSearchSubmit = () => {
     const first = searchResults[0];
     if (first) {
-      setSearchQuery(first.label);
-      setSearchResults([]);
-      addRecentSearch({
-        label: first.label,
-        latitude: first.latitude,
-        longitude: first.longitude
-      });
-      applyDestination({ latitude: first.latitude, longitude: first.longitude });
+      if (activeSearchField === "from") {
+        applyOrigin(
+          { latitude: first.latitude, longitude: first.longitude },
+          first.label
+        );
+        setOriginQuery(first.label);
+      } else {
+        setSearchQuery(first.label);
+        setSearchResults([]);
+        addRecentSearch({
+          label: first.label,
+          latitude: first.latitude,
+          longitude: first.longitude
+        });
+        applyDestination({ latitude: first.latitude, longitude: first.longitude });
+      }
       setIsSearchModalOpen(false);
       return;
     }
 
-    const query = searchQuery.trim();
+    const query = (activeSearchField === "from" ? originQuery : searchQuery).trim();
     if (!query) {
       return;
     }
@@ -989,23 +1022,33 @@ export function HomeScreen() {
       }
 
       setSearchError(undefined);
-      addRecentSearch({
-        label: query,
-        latitude: firstFallback.latitude,
-        longitude: firstFallback.longitude
-      });
-      applyDestination({
-        latitude: firstFallback.latitude,
-        longitude: firstFallback.longitude
-      });
+
+      if (activeSearchField === "from") {
+        applyOrigin(
+          { latitude: firstFallback.latitude, longitude: firstFallback.longitude },
+          query
+        );
+      } else {
+        addRecentSearch({
+          label: query,
+          latitude: firstFallback.latitude,
+          longitude: firstFallback.longitude
+        });
+        applyDestination({
+          latitude: firstFallback.latitude,
+          longitude: firstFallback.longitude
+        });
+      }
+
       setIsSearchModalOpen(false);
     });
   };
 
   const openSearchModal = () => {
+    setActiveSearchField("to");
     setIsSearchModalOpen(true);
     setTimeout(() => {
-      modalSearchInputRef.current?.focus();
+      modalToInputRef.current?.focus();
     }, 120);
   };
 
@@ -1174,6 +1217,9 @@ export function HomeScreen() {
               <View>
                 <Text className={`text-[10px] uppercase tracking-[1.6px] ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Route</Text>
                 <Text className={`mt-1 text-xs ${isDark ? "text-[#d1d5db]" : "text-[#4b5563]"}`}>{gpsStatus}</Text>
+                <Text className={`mt-1 text-[11px] ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>
+                  From: {selectedOrigin?.label ?? "Current location"}
+                </Text>
               </View>
 
               <View className="flex-row items-center gap-2">
@@ -1301,17 +1347,18 @@ export function HomeScreen() {
           keyboardVerticalOffset={Platform.OS === "ios" ? 40 : 0}
         >
           <View className={`mt-24 flex-1 rounded-t-3xl px-5 pt-5 ${isDark ? "bg-[#111827]" : "bg-white"}`}>
-            <View className="flex-row items-center gap-2">
-              <View className={`h-12 flex-1 flex-row items-center rounded-2xl border px-3 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#d1d5db] bg-[#f9fafb]"}`}>
+            <View className="gap-2">
+              <View className={`h-12 flex-row items-center rounded-2xl border px-3 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#d1d5db] bg-[#f9fafb]"}`}>
+                <Text className={`mr-2 text-[11px] font-bold uppercase ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>From</Text>
                 <Text className={`mr-2 text-base ${isDark ? "text-[#6b7280]" : "text-[#9ca3af]"}`}>⌕</Text>
                 <TextInput
                   ref={(instance) => {
-                    modalSearchInputRef.current = instance;
-                    searchInputRef.current = instance;
+                    modalFromInputRef.current = instance;
                   }}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholder="Search destination"
+                  value={originQuery}
+                  onChangeText={setOriginQuery}
+                  onFocus={() => setActiveSearchField("from")}
+                  placeholder="Current location"
                   placeholderTextColor={isDark ? "#6b7280" : "#9ca3af"}
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -1319,14 +1366,18 @@ export function HomeScreen() {
                   onSubmitEditing={executeSearchSubmit}
                   className={`flex-1 text-[15px] ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}
                 />
-                {searchQuery.trim().length ? (
+                {originQuery.trim().length ? (
                   <Pressable
                     className={`ml-2 h-7 w-7 items-center justify-center rounded-full ${isDark ? "bg-[#374151]" : "bg-[#e5e7eb]"}`}
                     onPress={() => {
-                      setSearchQuery("");
+                      setOriginQuery("");
                       setSearchResults([]);
                       setSearchError(undefined);
-                      modalSearchInputRef.current?.focus();
+                      setSelectedOrigin(undefined);
+                      if (selectedDestination && currentPosition) {
+                        void fetchRoadRoute(currentPosition, selectedDestination);
+                      }
+                      modalFromInputRef.current?.focus();
                     }}
                   >
                     <Text className={`text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>x</Text>
@@ -1334,18 +1385,73 @@ export function HomeScreen() {
                 ) : null}
               </View>
 
-              <Pressable
-                className={`h-12 items-center justify-center rounded-2xl border px-4 ${isDark ? "border-[#374151]" : "border-[#d1d5db]"}`}
-                onPress={() => setIsSearchModalOpen(false)}
-              >
-                <Text className={`text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>Close</Text>
-              </Pressable>
+              <View className="flex-row items-center justify-between">
+                <Pressable
+                  className={`rounded-full border px-3 py-1.5 ${isDark ? "border-[#374151]" : "border-[#d1d5db]"}`}
+                  onPress={() => {
+                    setSelectedOrigin(undefined);
+                    setOriginQuery("");
+                    setActiveSearchField("to");
+                    if (selectedDestination && currentPosition) {
+                      void fetchRoadRoute(currentPosition, selectedDestination);
+                    }
+                  }}
+                >
+                  <Text className={`text-[10px] font-bold uppercase ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Use Current Location</Text>
+                </Pressable>
+                <Text className={`text-[11px] ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`} numberOfLines={1}>
+                  {selectedOrigin?.label ?? "Current location"}
+                </Text>
+              </View>
+
+              <View className="flex-row items-center gap-2">
+                <View className={`h-12 flex-1 flex-row items-center rounded-2xl border px-3 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#d1d5db] bg-[#f9fafb]"}`}>
+                  <Text className={`mr-2 text-[11px] font-bold uppercase ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>To</Text>
+                  <Text className={`mr-2 text-base ${isDark ? "text-[#6b7280]" : "text-[#9ca3af]"}`}>⌕</Text>
+                  <TextInput
+                    ref={(instance) => {
+                      modalToInputRef.current = instance;
+                      searchInputRef.current = instance;
+                    }}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    onFocus={() => setActiveSearchField("to")}
+                    placeholder="Search destination"
+                    placeholderTextColor={isDark ? "#6b7280" : "#9ca3af"}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="search"
+                    onSubmitEditing={executeSearchSubmit}
+                    className={`flex-1 text-[15px] ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}
+                  />
+                  {searchQuery.trim().length ? (
+                    <Pressable
+                      className={`ml-2 h-7 w-7 items-center justify-center rounded-full ${isDark ? "bg-[#374151]" : "bg-[#e5e7eb]"}`}
+                      onPress={() => {
+                        setSearchQuery("");
+                        setSearchResults([]);
+                        setSearchError(undefined);
+                        modalToInputRef.current?.focus();
+                      }}
+                    >
+                      <Text className={`text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>x</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+
+                <Pressable
+                  className={`h-12 items-center justify-center rounded-2xl border px-4 ${isDark ? "border-[#374151]" : "border-[#d1d5db]"}`}
+                  onPress={() => setIsSearchModalOpen(false)}
+                >
+                  <Text className={`text-xs font-bold ${isDark ? "text-[#f3f4f6]" : "text-[#111827]"}`}>Close</Text>
+                </Pressable>
+              </View>
             </View>
 
             {searchLoading ? <Text className="mt-3 text-xs text-[#0369a1]">Searching...</Text> : null}
             {searchError ? <Text className="mt-3 text-xs text-[#b45309]">{searchError}</Text> : null}
 
-            {!searchQuery.trim().length && recentSearches.length ? (
+            {activeSearchField === "to" && !searchQuery.trim().length && recentSearches.length ? (
               <View className="mt-3">
                 <View className="mb-2 flex-row items-center justify-between">
                   <Text className={`text-[11px] font-bold uppercase tracking-wide ${isDark ? "text-[#9ca3af]" : "text-[#6b7280]"}`}>Recent Searches</Text>
@@ -1383,14 +1489,23 @@ export function HomeScreen() {
                   key={result.id}
                   className={`mb-2 rounded-xl border px-3 py-3 ${isDark ? "border-[#374151] bg-[#1f2937]" : "border-[#e5e7eb] bg-white"}`}
                   onPress={() => {
-                    setSearchQuery(result.label);
-                    setSearchResults([]);
-                    addRecentSearch({
-                      label: result.label,
-                      latitude: result.latitude,
-                      longitude: result.longitude
-                    });
-                    applyDestination({ latitude: result.latitude, longitude: result.longitude });
+                    if (activeSearchField === "from") {
+                      setOriginQuery(result.label);
+                      setSearchResults([]);
+                      applyOrigin(
+                        { latitude: result.latitude, longitude: result.longitude },
+                        result.label
+                      );
+                    } else {
+                      setSearchQuery(result.label);
+                      setSearchResults([]);
+                      addRecentSearch({
+                        label: result.label,
+                        latitude: result.latitude,
+                        longitude: result.longitude
+                      });
+                      applyDestination({ latitude: result.latitude, longitude: result.longitude });
+                    }
                     setIsSearchModalOpen(false);
                   }}
                 >

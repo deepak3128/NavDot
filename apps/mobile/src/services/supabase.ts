@@ -10,9 +10,9 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 export const supabaseConfig = {
-  url: supabaseUrl.replace(/\/$/, ""),
+  url: supabaseUrl.replace(/\/$/, "").replace(/\/auth\/v1$/, ""),
   anonKey: supabaseAnonKey,
-  authBaseUrl: `${supabaseUrl.replace(/\/$/, "")}/auth/v1`
+  authBaseUrl: `${supabaseUrl.replace(/\/$/, "").replace(/\/auth\/v1$/, "")}/auth/v1`
 };
 
 const sessionStorageKey = "navdot-supabase-session";

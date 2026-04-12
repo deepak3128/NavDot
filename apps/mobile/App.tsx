@@ -6,7 +6,8 @@ import { Feather } from "@expo/vector-icons";
 import { NavigationContainer, DarkTheme, DefaultTheme } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Platform, PermissionsAndroid, Alert, View, Text, ActivityIndicator, Linking } from "react-native";
+import { Platform, PermissionsAndroid, Alert, View, Text, ActivityIndicator } from "react-native";
+import * as Location from "expo-location";
 import { HomeScreen } from "./src/screens/HomeScreen";
 import { NavigationScreen } from "./src/screens/NavigationScreen";
 import ProfileScreen from "./src/screens/ProfileScreen";
@@ -49,9 +50,7 @@ async function checkLocationServiceEnabled(): Promise<boolean> {
   }
 
   try {
-    // Simply alert user to enable location service
-    // Full check requires additional native module
-    return true;
+    return await Location.hasServicesEnabledAsync();
   } catch (err) {
     console.warn("Location service check error:", err);
     return true;
@@ -74,23 +73,17 @@ async function requestLocationPermission(): Promise<boolean> {
         buttonPositive: "Allow"
       }
     );
-    
-    // After permission is granted, show alert with manual instructions
+
     if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-      setTimeout(() => {
+      const servicesEnabled = await checkLocationServiceEnabled();
+      if (!servicesEnabled) {
         Alert.alert(
-          "Enable Location Service",
-          "You've granted the app permission. Now please:\n\n1. Open Settings on your phone\n2. Go to Location (or Connections)\n3. Turn ON the Location toggle\n4. Select 'High Accuracy' mode",
-          [
-            { 
-              text: "I've Enabled It", 
-              onPress: () => {
-                console.log("User enabled location service");
-              }
-            }
-          ]
+          "Turn On Location",
+          "Location services are off on this device. Turn on GPS to continue using navigation features.",
+          [{ text: "OK" }]
         );
-      }, 500);
+        return false;
+      }
     }
     
     return granted === PermissionsAndroid.RESULTS.GRANTED;
@@ -120,6 +113,27 @@ async function requestBluetoothPermission(): Promise<boolean> {
   }
 }
 
+async function checkBluetoothEnabled(): Promise<boolean> {
+  if (Platform.OS !== "android") {
+    return true;
+  }
+
+  try {
+    const poweredOn = await bleService.isPoweredOn();
+    if (!poweredOn) {
+      Alert.alert(
+        "Turn On Bluetooth",
+        "Bluetooth is off on this device. Turn it on to pair with NavDot hardware.",
+        [{ text: "OK" }]
+      );
+    }
+    return poweredOn;
+  } catch (err) {
+    console.warn("Bluetooth state check error:", err);
+    return true;
+  }
+}
+
 export default function App() {
   const token = useAuthStore((state) => state.token);
   const isReady = useAuthStore((state) => state.isReady);
@@ -139,11 +153,14 @@ export default function App() {
         
         // Then request Bluetooth permission
         const bluetoothGranted = await requestBluetoothPermission();
+
+        // Only warn if Bluetooth radio is actually off
+        const bluetoothEnabled = await checkBluetoothEnabled();
         
         // Attempt to auto-connect to preferred device
         await bleService.autoConnectPreferredDevice();
         
-        if (!locationGranted || !bluetoothGranted) {
+        if (!locationGranted || !bluetoothGranted || !bluetoothEnabled) {
           Alert.alert(
             "Permissions Incomplete",
             "Some features may not work without Bluetooth and Location permissions enabled."

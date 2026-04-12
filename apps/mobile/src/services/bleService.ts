@@ -104,6 +104,15 @@ class BleService {
     });
   }
 
+  async isPoweredOn(): Promise<boolean> {
+    if (!this.ensureAvailable()) {
+      return false;
+    }
+
+    const manager = this.manager!;
+    return (await manager.state()) === "PoweredOn";
+  }
+
   async startScan(): Promise<void> {
     if (!this.ensureAvailable()) {
       return;
@@ -359,9 +368,11 @@ class BleService {
     cachedServiceUuid?: string;
     cachedCharacteristicUuid?: string;
   } {
+    const deviceName = this.connectedDevice?.name ?? this.connectedDevice?.localName ?? undefined;
+
     return {
       deviceId: this.connectedDevice?.id,
-      deviceName: this.connectedDevice?.name ?? this.connectedDevice?.localName,
+      deviceName,
       requestedMtu: this.requestedMtu,
       negotiatedMtu: this.negotiatedMtu,
       cachedServiceUuid: this.cachedWriteCharacteristic?.serviceUUID,

@@ -3,8 +3,12 @@ import {
   loadStoredSession,
   requestSupabaseAuth,
   saveStoredSession,
+  supabaseConfig,
   type SupabaseStoredSession
 } from "./supabase";
+import * as WebBrowser from "expo-web-browser";
+
+WebBrowser.maybeCompleteAuthSession();
 
 type LoginResponse = {
   token: string;
@@ -56,6 +60,8 @@ type AuthSession = {
   };
 };
 
+export type OAuthProvider = "google" | "apple";
+
 type SupabaseSignUpResponse = {
   user: {
     id: string;
@@ -100,6 +106,81 @@ type SupabaseRefreshResponse = {
     };
   };
 };
+
+type SupabaseUserResponse = {
+  id: string;
+  email: string;
+  created_at?: string;
+  user_metadata?: {
+    full_name?: string;
+    avatar_url?: string;
+  };
+};
+
+function parseOAuthCallback(url: string): {
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  errorDescription?: string;
+  error?: string;
+} {
+  const params = new URLSearchParams();
+
+  const queryIndex = url.indexOf("?");
+  const hashIndex = url.indexOf("#");
+
+  if (queryIndex >= 0) {
+    const query = url.slice(queryIndex + 1, hashIndex >= 0 ? hashIndex : undefined);
+    const queryParams = new URLSearchParams(query);
+    queryParams.forEach((value, key) => params.append(key, value));
+  }
+
+  if (hashIndex >= 0) {
+    const hash = url.slice(hashIndex + 1);
+    const hashParams = new URLSearchParams(hash);
+    hashParams.forEach((value, key) => params.append(key, value));
+  }
+
+  const accessToken = params.get("access_token") ?? undefined;
+  const refreshToken = params.get("refresh_token") ?? undefined;
+  const expiresInRaw = params.get("expires_in");
+  const expiresAtRaw = params.get("expires_at");
+  const error = params.get("error") ?? undefined;
+  const errorDescription = params.get("error_description") ?? undefined;
+
+  let expiresAt: number | undefined;
+  if (expiresAtRaw) {
+    const parsed = Number(expiresAtRaw);
+    if (Number.isFinite(parsed)) {
+      expiresAt = parsed;
+    }
+  } else if (expiresInRaw) {
+    const parsed = Number(expiresInRaw);
+    if (Number.isFinite(parsed)) {
+      expiresAt = Math.floor(Date.now() / 1000) + parsed;
+    }
+  }
+
+  return {
+    accessToken,
+    refreshToken,
+    expiresAt,
+    error,
+    errorDescription
+  };
+}
+
+function mapSessionFromUser(user: SupabaseUserResponse, session: SupabaseStoredSession): AuthSession {
+  return {
+    token: session.access_token,
+    user: {
+      id: user.id,
+      email: user.email,
+      fullName: getSessionDisplayName(user.user_metadata),
+      avatarUrl: getSessionAvatarUrl(user.user_metadata)
+    }
+  };
+}
 
 function getSessionDisplayName(metadata: unknown): string | undefined {
   if (!metadata || typeof metadata !== "object") {
@@ -180,6 +261,60 @@ export function mapSupabaseSession(session: SupabaseStoredSession): AuthSession 
       avatarUrl: session.user.avatar_url ?? undefined
     }
   };
+}
+
+export async function loginWithOAuth(provider: OAuthProvider): Promise<AuthSession> {
+  const redirectTo = "navdot://auth-callback";
+  const authUrl = `${supabaseConfig.authBaseUrl}/authorize?provider=${provider}&redirect_to=${encodeURIComponent(redirectTo)}&response_type=token`;
+
+  const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectTo);
+
+  if (result.type !== "success" || !result.url) {
+    if (result.type === "cancel" || result.type === "dismiss") {
+      throw new Error("Authentication was canceled.");
+    }
+    throw new Error("Unable to complete OAuth authentication.");
+  }
+
+  const callback = parseOAuthCallback(result.url);
+  if (callback.error) {
+    const combined = `${callback.error} ${callback.errorDescription ?? ""}`.toLowerCase();
+    if (combined.includes("unsupported provider") || combined.includes("unsuported provider")) {
+      throw new Error(
+        "Google sign-in is not enabled in Supabase or provider config is invalid. In Supabase Dashboard, open Authentication > Providers > Google, enable it, set Client ID/Secret, and add redirect URI: https://<your-project-ref>.supabase.co/auth/v1/callback"
+      );
+    }
+
+    throw new Error(callback.errorDescription || callback.error);
+  }
+
+  if (!callback.accessToken) {
+    throw new Error("OAuth completed, but no access token was returned.");
+  }
+
+  const user = await requestSupabaseAuth<SupabaseUserResponse>(
+    "/user",
+    {
+      method: "GET"
+    },
+    callback.accessToken
+  );
+
+  const session: SupabaseStoredSession = {
+    access_token: callback.accessToken,
+    refresh_token: callback.refreshToken,
+    expires_at: callback.expiresAt,
+    user: {
+      id: user.id,
+      email: user.email,
+      created_at: user.created_at,
+      full_name: getSessionDisplayName(user.user_metadata),
+      avatar_url: getSessionAvatarUrl(user.user_metadata)
+    }
+  };
+
+  await saveStoredSession(session);
+  return mapSessionFromUser(user, session);
 }
 
 export async function registerUser(payload: {
